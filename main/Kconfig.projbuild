@@ -1,0 +1,47 @@
+menu "CSI transmitter"
+
+config CSI_TX_WIFI_CHANNEL
+    int "Default Wi-Fi channel"
+    range 1 13
+    default 5
+
+choice CSI_TX_WIFI_BANDWIDTH
+    prompt "Default bandwidth"
+    default CSI_TX_WIFI_BANDWIDTH_HT20
+
+config CSI_TX_WIFI_BANDWIDTH_HT20
+    bool "20 MHz"
+
+config CSI_TX_WIFI_BANDWIDTH_HT40
+    bool "40 MHz"
+
+endchoice
+
+choice CSI_TX_WIFI_SECONDARY_CHANNEL
+    prompt "Secondary channel for 40 MHz"
+    default CSI_TX_WIFI_SECONDARY_CHANNEL_ABOVE
+
+config CSI_TX_WIFI_SECONDARY_CHANNEL_ABOVE
+    bool "Above"
+
+config CSI_TX_WIFI_SECONDARY_CHANNEL_BELOW
+    bool "Below"
+
+endchoice
+
+config CSI_TX_MCS_INDEX
+    int "Default HT MCS index"
+    range 0 7
+    default 0
+
+config CSI_TX_INTERVAL_MS
+    int "Transmit interval (ms)"
+    range 1 60000
+    default 20
+
+config CSI_TX_MAX_TX_POWER_QDBM
+    int "Max TX power (0.25 dBm units)"
+    range 8 84
+    default 80
+
+endmenu

@@ -22,9 +22,6 @@ config CSI_TX_MODULATION_HE20
 
 endchoice
 
-comment "802.11ax HE40 raw TX is not exposed by the current ESP-IDF API on ESP32-C5"
-    depends on SOC_WIFI_HE_SUPPORT
-
 choice CSI_TX_11B_RATE
     prompt "802.11b rate"
     depends on CSI_TX_MODULATION_11B

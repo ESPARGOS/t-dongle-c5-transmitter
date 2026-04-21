@@ -11,11 +11,10 @@
 #include "esp_event.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
-#include "esp_lcd_st7735.h"
 #include "esp_lcd_panel_vendor.h"
+#include "esp_lcd_st7735.h"
 #include "esp_log.h"
 #include "esp_mac.h"
-#include "esp_rom_sys.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -40,21 +39,21 @@ static const char *TAG = "csi_tx";
 #define CSI_TX_LCD_PIN_CS GPIO_NUM_10
 #define CSI_TX_LCD_PIN_SCLK GPIO_NUM_6
 #define CSI_TX_LCD_PIN_MOSI GPIO_NUM_2
+
 #define CSI_TX_BUTTON_PIN GPIO_NUM_28
 #define CSI_TX_BUTTON_ACTIVE_LEVEL 0
 #define CSI_TX_BUTTON_DEBOUNCE_US 30000
 #define CSI_TX_BUTTON_LONG_PRESS_US 600000
+
+#define CSI_TX_LED_SPI_CLOCK_HZ (500 * 1000)
+#define CSI_TX_LED_BRIGHTNESS 31
+
+#define CSI_TX_SPLASH_MS 1500
 #define CSI_TX_UI_TICK_PERIOD_MS 5
 #define CSI_TX_UI_REFRESH_MS 40
 #define CSI_TX_STATUS_PERIOD_MS 1000
-#define CSI_TX_SPLASH_MS 1500
-#define CSI_TX_LED_PIN_CI CSI_TX_LCD_PIN_SCLK
-#define CSI_TX_LED_PIN_DI CSI_TX_LCD_PIN_MOSI
-#define CSI_TX_LED_SPI_CLOCK_HZ (500 * 1000)
-#define CSI_TX_LED_BRIGHTNESS 31
 #define CSI_TX_HOME_LOGO_WIDTH 136
 #define CSI_TX_HOME_LOGO_HEIGHT 28
-#define CSI_TX_HOME_LOGO_OFFSET_X ((CSI_TX_LCD_V_RES - CSI_TX_HOME_LOGO_WIDTH) / 2)
 #define CSI_TX_HOME_LOGO_OFFSET_Y 16
 
 typedef enum {
@@ -66,19 +65,19 @@ typedef enum {
 } csi_tx_modulation_t;
 
 typedef enum {
-    CSI_TX_UI_MODE_HOME,
-    CSI_TX_UI_MODE_MENU_NAV,
-    CSI_TX_UI_MODE_MENU_EDIT,
+    CSI_TX_UI_HOME,
+    CSI_TX_UI_MENU,
+    CSI_TX_UI_EDIT,
 } csi_tx_ui_mode_t;
 
 typedef enum {
-    CSI_TX_MENU_ITEM_CHANNEL,
-    CSI_TX_MENU_ITEM_TX_INDEX,
-    CSI_TX_MENU_ITEM_MODULATION,
-    CSI_TX_MENU_ITEM_RATE,
-    CSI_TX_MENU_ITEM_SECONDARY,
-    CSI_TX_MENU_ITEM_INTERVAL,
-    CSI_TX_MENU_ITEM_TX_POWER,
+    CSI_TX_MENU_CHANNEL,
+    CSI_TX_MENU_TX_INDEX,
+    CSI_TX_MENU_MODULATION,
+    CSI_TX_MENU_RATE,
+    CSI_TX_MENU_SECONDARY,
+    CSI_TX_MENU_INTERVAL,
+    CSI_TX_MENU_TX_POWER,
 } csi_tx_menu_item_t;
 
 typedef struct {
@@ -112,42 +111,82 @@ typedef struct {
 } csi_tx_config_t;
 
 typedef struct {
+    csi_tx_config_t active_config;
+    csi_tx_config_t edit_config;
+    csi_tx_ui_mode_t ui_mode;
+    csi_tx_menu_item_t menu_item;
+    bool long_press_preview;
     uint8_t current_channel;
     uint32_t tx_count;
     uint32_t tx_failures;
-} csi_tx_runtime_t;
-
-typedef struct {
-    csi_tx_ui_mode_t mode;
-    csi_tx_menu_item_t item;
-    csi_tx_config_t edit_config;
-    bool long_press_preview;
-} csi_tx_ui_state_t;
-
-typedef struct {
-    csi_tx_runtime_t runtime;
-    csi_tx_config_t active_config;
-    csi_tx_config_t preview_config;
-    csi_tx_ui_state_t ui_state;
-} csi_tx_ui_snapshot_t;
+} csi_tx_state_t;
 
 static const uint32_t s_interval_options_ms[] = {
     1, 2, 5, 7, 10, 11, 13, 15, 16, 20, 25, 50, 100, 200, 500, 1000,
 };
+
 static const int8_t s_tx_power_options_qdbm[] = {
     8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 84,
 };
 
-static wifi_frame_t s_frame = {
+static const wifi_phy_rate_t s_rates_11b[] = {
+    WIFI_PHY_RATE_1M_L,
+    WIFI_PHY_RATE_2M_L,
+    WIFI_PHY_RATE_5M_L,
+    WIFI_PHY_RATE_11M_L,
+};
+
+static const char *const s_rate_names_11b[] = {
+    "1M", "2M", "5.5M", "11M",
+};
+
+static const wifi_phy_rate_t s_rates_11g[] = {
+    WIFI_PHY_RATE_6M,
+    WIFI_PHY_RATE_9M,
+    WIFI_PHY_RATE_12M,
+    WIFI_PHY_RATE_18M,
+    WIFI_PHY_RATE_24M,
+    WIFI_PHY_RATE_36M,
+    WIFI_PHY_RATE_48M,
+    WIFI_PHY_RATE_54M,
+};
+
+static const char *const s_rate_names_11g[] = {
+    "6M", "9M", "12M", "18M", "24M", "36M", "48M", "54M",
+};
+
+static const wifi_phy_rate_t s_rates_mcs[] = {
+    WIFI_PHY_RATE_MCS0_LGI,
+    WIFI_PHY_RATE_MCS1_LGI,
+    WIFI_PHY_RATE_MCS2_LGI,
+    WIFI_PHY_RATE_MCS3_LGI,
+    WIFI_PHY_RATE_MCS4_LGI,
+    WIFI_PHY_RATE_MCS5_LGI,
+    WIFI_PHY_RATE_MCS6_LGI,
+    WIFI_PHY_RATE_MCS7_LGI,
+#if CONFIG_SOC_WIFI_HE_SUPPORT
+    WIFI_PHY_RATE_MCS8_LGI,
+    WIFI_PHY_RATE_MCS9_LGI,
+#endif
+};
+
+static const char *const s_rate_names_mcs[] = {
+    "MCS0", "MCS1", "MCS2", "MCS3", "MCS4",
+    "MCS5", "MCS6", "MCS7",
+#if CONFIG_SOC_WIFI_HE_SUPPORT
+    "MCS8", "MCS9",
+#endif
+};
+
+static const wifi_frame_t s_frame_template = {
     .frame_control = {0x08, 0x00},
     .duration = {0x00, 0x00},
     .destination = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
     .payload = {0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef},
 };
 
-static csi_tx_config_t s_config;
-static csi_tx_runtime_t s_runtime;
-static csi_tx_ui_state_t s_ui_state;
+static wifi_frame_t s_frame;
+static csi_tx_state_t s_state;
 static uint8_t s_base_mac[6];
 static bool s_wifi_ready;
 static bool s_led_ready;
@@ -156,13 +195,12 @@ static portMUX_TYPE s_state_lock = portMUX_INITIALIZER_UNLOCKED;
 static esp_lcd_panel_io_handle_t s_lcd_io;
 static esp_lcd_panel_handle_t s_lcd_panel;
 static lv_display_t *s_lv_display;
-static lv_obj_t *s_home_container;
-static lv_obj_t *s_menu_container;
+static lv_obj_t *s_home_screen;
 static lv_obj_t *s_home_logo;
-static lv_obj_t *s_marquee_label;
-static lv_obj_t *s_menu_header_label;
-static lv_obj_t *s_menu_body_label;
-static lv_obj_t *s_menu_hint_label;
+static lv_obj_t *s_home_status;
+static lv_obj_t *s_menu_screen;
+static lv_obj_t *s_menu_header;
+static lv_obj_t *s_menu_body;
 static esp_timer_handle_t s_lvgl_tick_timer;
 static spi_device_handle_t s_led_strip;
 
@@ -189,14 +227,15 @@ static TickType_t csi_tx_ms_to_ticks(uint32_t interval_ms)
 
 static uint32_t csi_tx_get_tx_color(uint8_t tx_index)
 {
-    switch (tx_index) {
-    case 1: return 0x1f77b4;
-    case 2: return 0xff7f0e;
-    case 3: return 0x2ca02c;
-    case 4: return 0xd62728;
-    case 5: return 0x9467bd;
-    default: return 0x1f77b4;
+    static const uint32_t colors[] = {
+        0x1f77b4, 0xff7f0e, 0x2ca02c, 0xd62728, 0x9467bd,
+    };
+
+    if (tx_index < 1 || tx_index > sizeof(colors) / sizeof(colors[0])) {
+        return colors[0];
     }
+
+    return colors[tx_index - 1U];
 }
 
 static void csi_tx_prepare_home_logo(void)
@@ -208,6 +247,7 @@ static void csi_tx_prepare_home_logo(void)
     uint8_t *alpha_plane = s_home_logo_pixels + (pixel_count * 2);
 
     if (mask_size != pixel_count) {
+        ESP_LOGW(TAG, "unexpected home logo mask size: %u", (unsigned)mask_size);
         return;
     }
 
@@ -215,151 +255,116 @@ static void csi_tx_prepare_home_logo(void)
         color_plane[(i * 2) + 0] = 0xff;
         color_plane[(i * 2) + 1] = 0xff;
     }
+
     memcpy(alpha_plane, mask, pixel_count);
 }
 
-static bool csi_tx_modulation_supports_secondary(csi_tx_modulation_t modulation)
+static bool csi_tx_has_secondary_channel(csi_tx_modulation_t modulation)
 {
     return modulation == CSI_TX_MOD_HT40;
-}
-
-static uint8_t csi_tx_get_rate_count(csi_tx_modulation_t modulation)
-{
-    switch (modulation) {
-    case CSI_TX_MOD_11B:
-        return 4;
-    case CSI_TX_MOD_11G:
-        return 8;
-    case CSI_TX_MOD_HE20:
-#if CONFIG_SOC_WIFI_HE_SUPPORT
-        return 10;
-#else
-        return 8;
-#endif
-    case CSI_TX_MOD_HT20:
-    case CSI_TX_MOD_HT40:
-    default:
-        return 8;
-    }
-}
-
-static wifi_phy_rate_t csi_tx_get_rate_11b(int rate_index)
-{
-    switch (rate_index) {
-    case 0: return WIFI_PHY_RATE_1M_L;
-    case 1: return WIFI_PHY_RATE_2M_L;
-    case 2: return WIFI_PHY_RATE_5M_L;
-    case 3: return WIFI_PHY_RATE_11M_L;
-    default: return WIFI_PHY_RATE_1M_L;
-    }
-}
-
-static wifi_phy_rate_t csi_tx_get_rate_11g(int rate_index)
-{
-    switch (rate_index) {
-    case 0: return WIFI_PHY_RATE_6M;
-    case 1: return WIFI_PHY_RATE_9M;
-    case 2: return WIFI_PHY_RATE_12M;
-    case 3: return WIFI_PHY_RATE_18M;
-    case 4: return WIFI_PHY_RATE_24M;
-    case 5: return WIFI_PHY_RATE_36M;
-    case 6: return WIFI_PHY_RATE_48M;
-    case 7: return WIFI_PHY_RATE_54M;
-    default: return WIFI_PHY_RATE_6M;
-    }
-}
-
-static wifi_phy_rate_t csi_tx_get_rate_mcs(int rate_index)
-{
-    switch (rate_index) {
-    case 0: return WIFI_PHY_RATE_MCS0_LGI;
-    case 1: return WIFI_PHY_RATE_MCS1_LGI;
-    case 2: return WIFI_PHY_RATE_MCS2_LGI;
-    case 3: return WIFI_PHY_RATE_MCS3_LGI;
-    case 4: return WIFI_PHY_RATE_MCS4_LGI;
-    case 5: return WIFI_PHY_RATE_MCS5_LGI;
-    case 6: return WIFI_PHY_RATE_MCS6_LGI;
-    case 7: return WIFI_PHY_RATE_MCS7_LGI;
-#if CONFIG_SOC_WIFI_HE_SUPPORT
-    case 8: return WIFI_PHY_RATE_MCS8_LGI;
-    case 9: return WIFI_PHY_RATE_MCS9_LGI;
-#endif
-    default: return WIFI_PHY_RATE_MCS0_LGI;
-    }
 }
 
 static const char *csi_tx_get_modulation_name(csi_tx_modulation_t modulation)
 {
     switch (modulation) {
-    case CSI_TX_MOD_11B: return "11b";
-    case CSI_TX_MOD_11G: return "11g";
-    case CSI_TX_MOD_HT20: return "11n HT20";
-    case CSI_TX_MOD_HT40: return "11n HT40";
-    case CSI_TX_MOD_HE20: return "11ax HE20";
-    default: return "11n HT20";
+    case CSI_TX_MOD_11B:
+        return "11b";
+    case CSI_TX_MOD_11G:
+        return "11g";
+    case CSI_TX_MOD_HT20:
+        return "11n HT20";
+    case CSI_TX_MOD_HT40:
+        return "11n HT40";
+    case CSI_TX_MOD_HE20:
+        return "11ax HE20";
+    default:
+        return "11n HT20";
     }
 }
 
-static const char *csi_tx_get_rate_name(csi_tx_modulation_t modulation, int rate_index)
+static void csi_tx_get_rate_table(csi_tx_modulation_t modulation,
+                                  const wifi_phy_rate_t **rates,
+                                  const char *const **names,
+                                  size_t *count)
 {
-    static const char *const names_11b[] = {"1M", "2M", "5.5M", "11M"};
-    static const char *const names_11g[] = {"6M", "9M", "12M", "18M", "24M", "36M", "48M", "54M"};
-    static const char *const names_mcs[] = {
-        "MCS0", "MCS1", "MCS2", "MCS3", "MCS4",
-        "MCS5", "MCS6", "MCS7", "MCS8", "MCS9",
-    };
+    const wifi_phy_rate_t *selected_rates;
+    const char *const *selected_names;
+    size_t selected_count;
 
     switch (modulation) {
     case CSI_TX_MOD_11B:
-        return names_11b[rate_index >= 0 && rate_index < 4 ? rate_index : 0];
+        selected_rates = s_rates_11b;
+        selected_names = s_rate_names_11b;
+        selected_count = sizeof(s_rates_11b) / sizeof(s_rates_11b[0]);
+        break;
     case CSI_TX_MOD_11G:
-        return names_11g[rate_index >= 0 && rate_index < 8 ? rate_index : 0];
+        selected_rates = s_rates_11g;
+        selected_names = s_rate_names_11g;
+        selected_count = sizeof(s_rates_11g) / sizeof(s_rates_11g[0]);
+        break;
     case CSI_TX_MOD_HT20:
     case CSI_TX_MOD_HT40:
     case CSI_TX_MOD_HE20:
     default:
-        return names_mcs[rate_index >= 0 && rate_index < 10 ? rate_index : 0];
+        selected_rates = s_rates_mcs;
+        selected_names = s_rate_names_mcs;
+        selected_count = sizeof(s_rates_mcs) / sizeof(s_rates_mcs[0]);
+        break;
+    }
+
+    if (rates != NULL) {
+        *rates = selected_rates;
+    }
+    if (names != NULL) {
+        *names = selected_names;
+    }
+    if (count != NULL) {
+        *count = selected_count;
     }
 }
 
 static void csi_tx_resolve_config(csi_tx_config_t *config)
 {
-    uint8_t rate_count = csi_tx_get_rate_count(config->modulation);
+    const wifi_phy_rate_t *rate_table = NULL;
+    const char *const *rate_names = NULL;
+    size_t rate_count = 0;
+
+    csi_tx_get_rate_table(config->modulation, &rate_table, &rate_names, &rate_count);
 
     config->protocol_bitmap = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
     config->bandwidth = WIFI_BW20;
-    config->secondary_channel = WIFI_SECOND_CHAN_NONE;
+    config->secondary_channel = csi_tx_has_secondary_channel(config->modulation)
+        ? config->secondary_channel
+        : WIFI_SECOND_CHAN_NONE;
     config->phy_mode = WIFI_PHY_MODE_HT20;
-    config->phy_rate = WIFI_PHY_RATE_MCS0_LGI;
     config->min_channel = 1;
     config->max_channel = 13;
 
-    if (config->rate_index < 0 || config->rate_index >= rate_count) {
-        config->rate_index = 0;
-    }
     if (config->tx_index < 1 || config->tx_index > 5) {
         config->tx_index = 1;
     }
     if (config->interval_ms == 0) {
         config->interval_ms = 1;
     }
+    if (rate_count == 0) {
+        rate_count = 1;
+    }
+    if (config->rate_index < 0 || (size_t)config->rate_index >= rate_count) {
+        config->rate_index = 0;
+    }
 
     switch (config->modulation) {
     case CSI_TX_MOD_11B:
         config->protocol_bitmap = WIFI_PROTOCOL_11B;
         config->phy_mode = WIFI_PHY_MODE_11B;
-        config->phy_rate = csi_tx_get_rate_11b(config->rate_index);
         break;
     case CSI_TX_MOD_11G:
         config->protocol_bitmap = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G;
         config->phy_mode = WIFI_PHY_MODE_11G;
-        config->phy_rate = csi_tx_get_rate_11g(config->rate_index);
         break;
     case CSI_TX_MOD_HT40:
-        config->protocol_bitmap = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
         config->bandwidth = WIFI_BW40;
         config->phy_mode = WIFI_PHY_MODE_HT40;
-        config->phy_rate = csi_tx_get_rate_mcs(config->rate_index);
         if (config->secondary_channel != WIFI_SECOND_CHAN_BELOW) {
             config->secondary_channel = WIFI_SECOND_CHAN_ABOVE;
         }
@@ -367,27 +372,22 @@ static void csi_tx_resolve_config(csi_tx_config_t *config)
         config->max_channel = config->secondary_channel == WIFI_SECOND_CHAN_ABOVE ? 9 : 13;
         break;
     case CSI_TX_MOD_HE20:
-        config->protocol_bitmap = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_11AX;
+        config->protocol_bitmap |= WIFI_PROTOCOL_11AX;
         config->phy_mode = WIFI_PHY_MODE_HE20;
-        config->phy_rate = csi_tx_get_rate_mcs(config->rate_index);
         break;
     case CSI_TX_MOD_HT20:
     default:
-        config->protocol_bitmap = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
         config->phy_mode = WIFI_PHY_MODE_HT20;
-        config->phy_rate = csi_tx_get_rate_mcs(config->rate_index);
         break;
     }
 
-    if (!csi_tx_modulation_supports_secondary(config->modulation)) {
-        config->secondary_channel = WIFI_SECOND_CHAN_NONE;
-    }
     if (config->channel < config->min_channel || config->channel > config->max_channel) {
         config->channel = config->min_channel;
     }
 
+    config->phy_rate = rate_table[config->rate_index];
     config->modulation_name = csi_tx_get_modulation_name(config->modulation);
-    config->rate_name = csi_tx_get_rate_name(config->modulation, config->rate_index);
+    config->rate_name = rate_names[config->rate_index];
     config->interval_ticks = csi_tx_ms_to_ticks(config->interval_ms);
     config->accent_rgb = csi_tx_get_tx_color(config->tx_index);
 }
@@ -413,83 +413,68 @@ static csi_tx_config_t csi_tx_get_default_config(void)
         .modulation = csi_tx_get_default_modulation(),
         .channel = CONFIG_CSI_TX_WIFI_CHANNEL,
         .tx_index = CONFIG_CSI_TX_INDEX,
+        .secondary_channel = WIFI_SECOND_CHAN_NONE,
         .interval_ms = CONFIG_CSI_TX_INTERVAL_MS,
         .max_tx_power_qdbm = CONFIG_CSI_TX_MAX_TX_POWER_QDBM,
         .rate_index = CONFIG_CSI_TX_RATE_INDEX,
-        .secondary_channel = WIFI_SECOND_CHAN_NONE,
     };
 
 #if CONFIG_CSI_TX_MODULATION_HT40
-    config.secondary_channel = CONFIG_CSI_TX_WIFI_SECONDARY_CHANNEL_ABOVE ? WIFI_SECOND_CHAN_ABOVE : WIFI_SECOND_CHAN_BELOW;
+    config.secondary_channel = CONFIG_CSI_TX_WIFI_SECONDARY_CHANNEL_ABOVE
+        ? WIFI_SECOND_CHAN_ABOVE
+        : WIFI_SECOND_CHAN_BELOW;
 #endif
 
     csi_tx_resolve_config(&config);
     return config;
 }
 
-static csi_tx_config_t csi_tx_get_config_snapshot(void)
+static csi_tx_state_t csi_tx_get_state_copy(void)
+{
+    csi_tx_state_t snapshot;
+
+    taskENTER_CRITICAL(&s_state_lock);
+    snapshot = s_state;
+    taskEXIT_CRITICAL(&s_state_lock);
+
+    return snapshot;
+}
+
+static csi_tx_config_t csi_tx_get_active_config(void)
 {
     csi_tx_config_t config;
 
     taskENTER_CRITICAL(&s_state_lock);
-    config = s_config;
+    config = s_state.active_config;
     taskEXIT_CRITICAL(&s_state_lock);
 
     return config;
 }
 
-static void csi_tx_set_runtime_channel(uint8_t channel)
+static void csi_tx_set_runtime_stats(uint32_t tx_count, uint32_t tx_failures, uint8_t channel)
 {
     taskENTER_CRITICAL(&s_state_lock);
-    s_runtime.current_channel = channel;
+    s_state.tx_count = tx_count;
+    s_state.tx_failures = tx_failures;
+    s_state.current_channel = channel;
     taskEXIT_CRITICAL(&s_state_lock);
-}
-
-static void csi_tx_note_tx_result(uint32_t tx_count, uint32_t tx_failures)
-{
-    taskENTER_CRITICAL(&s_state_lock);
-    s_runtime.tx_count = tx_count;
-    s_runtime.tx_failures = tx_failures;
-    taskEXIT_CRITICAL(&s_state_lock);
-}
-
-static csi_tx_runtime_t csi_tx_get_runtime_snapshot(void)
-{
-    csi_tx_runtime_t snapshot;
-
-    taskENTER_CRITICAL(&s_state_lock);
-    snapshot = s_runtime;
-    taskEXIT_CRITICAL(&s_state_lock);
-
-    return snapshot;
-}
-
-static csi_tx_ui_snapshot_t csi_tx_get_ui_snapshot(void)
-{
-    csi_tx_ui_snapshot_t snapshot;
-
-    taskENTER_CRITICAL(&s_state_lock);
-    snapshot.runtime = s_runtime;
-    snapshot.active_config = s_config;
-    snapshot.ui_state = s_ui_state;
-    snapshot.preview_config = s_ui_state.mode == CSI_TX_UI_MODE_MENU_EDIT ? s_ui_state.edit_config : s_config;
-    taskEXIT_CRITICAL(&s_state_lock);
-
-    return snapshot;
 }
 
 static esp_err_t csi_tx_init_nvs(void)
 {
     esp_err_t err = nvs_flash_init();
+
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_RETURN_ON_ERROR(nvs_flash_erase(), TAG, "failed to erase NVS");
         err = nvs_flash_init();
     }
+
     return err;
 }
 
 static void csi_tx_prepare_frame(void)
 {
+    s_frame = s_frame_template;
     ESP_ERROR_CHECK(esp_read_mac(s_base_mac, ESP_MAC_WIFI_STA));
 }
 
@@ -504,7 +489,7 @@ static void csi_tx_update_frame_identity(uint8_t tx_index)
 static esp_err_t csi_tx_apply_channel(uint8_t channel, wifi_second_chan_t secondary_channel)
 {
     ESP_RETURN_ON_ERROR(esp_wifi_set_channel(channel, secondary_channel), TAG, "failed to set channel");
-    csi_tx_set_runtime_channel(channel);
+    csi_tx_set_runtime_stats(s_state.tx_count, s_state.tx_failures, channel);
     return ESP_OK;
 }
 
@@ -548,29 +533,23 @@ static esp_err_t csi_tx_init_wifi(void)
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_STA, &wifi_config), TAG, "failed to set STA config");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "failed to start Wi-Fi");
     ESP_RETURN_ON_ERROR(esp_wifi_set_band_mode(WIFI_BAND_MODE_2G_ONLY), TAG, "failed to force 2.4 GHz band");
-    ESP_RETURN_ON_ERROR(csi_tx_apply_wifi_config(&s_config), TAG, "failed to apply runtime Wi-Fi config");
+    ESP_RETURN_ON_ERROR(csi_tx_apply_wifi_config(&s_state.active_config), TAG, "failed to apply Wi-Fi config");
 
     s_wifi_ready = true;
     return ESP_OK;
 }
 
-static void csi_tx_log_config(void)
+static void csi_tx_log_config(const csi_tx_config_t *config)
 {
     ESP_LOGI(TAG,
              "ready: mac=%02x:%02x:%02x:%02x:%02x:%02x tx=%u channel=%u modulation=%s rate=%s interval=%" PRIu32 "ms",
              s_frame.source[0], s_frame.source[1], s_frame.source[2],
              s_frame.source[3], s_frame.source[4], s_frame.source[5],
-             s_config.tx_index,
-             s_config.channel,
-             s_config.modulation_name,
-             s_config.rate_name,
-             s_config.interval_ms);
-}
-
-static void csi_tx_console_warmup(void)
-{
-    esp_rom_printf("csi_tx boot\r\n");
-    vTaskDelay(pdMS_TO_TICKS(1000));
+             config->tx_index,
+             config->channel,
+             config->modulation_name,
+             config->rate_name,
+             config->interval_ms);
 }
 
 static esp_err_t csi_tx_init_led(void)
@@ -598,20 +577,15 @@ static void csi_tx_set_led_rgb(uint32_t rgb)
         .length = sizeof(buffer) * 8,
         .tx_buffer = buffer,
     };
-    uint8_t red = (uint8_t)((rgb >> 16) & 0xff);
-    uint8_t green = (uint8_t)((rgb >> 8) & 0xff);
-    uint8_t blue = (uint8_t)(rgb & 0xff);
 
     if (!s_led_ready) {
         return;
     }
 
-    // APA102 uses a 4-byte start frame, then [brightness | blue | green | red],
-    // followed by trailing 1 bits to latch the last LED.
     buffer[4] = 0b11100000 | (CSI_TX_LED_BRIGHTNESS & 0x1f);
-    buffer[5] = blue;
-    buffer[6] = green;
-    buffer[7] = red;
+    buffer[5] = (uint8_t)(rgb & 0xff);
+    buffer[6] = (uint8_t)((rgb >> 8) & 0xff);
+    buffer[7] = (uint8_t)((rgb >> 16) & 0xff);
 
     if (spi_device_transmit(s_led_strip, &transaction) != ESP_OK) {
         ESP_LOGW(TAG, "failed to update APA102 LED");
@@ -620,24 +594,20 @@ static void csi_tx_set_led_rgb(uint32_t rgb)
 
 static esp_err_t csi_tx_apply_runtime_config(csi_tx_config_t config)
 {
-    esp_err_t err = ESP_OK;
-
     csi_tx_resolve_config(&config);
 
     if (s_wifi_ready) {
-        err = csi_tx_apply_wifi_config(&config);
-        if (err != ESP_OK) {
-            return err;
-        }
+        ESP_RETURN_ON_ERROR(csi_tx_apply_wifi_config(&config), TAG, "failed to apply Wi-Fi config");
     } else {
-        csi_tx_set_runtime_channel(config.channel);
+        csi_tx_set_runtime_stats(s_state.tx_count, s_state.tx_failures, config.channel);
     }
 
     csi_tx_update_frame_identity(config.tx_index);
     csi_tx_set_led_rgb(config.accent_rgb);
 
     taskENTER_CRITICAL(&s_state_lock);
-    s_config = config;
+    s_state.active_config = config;
+    s_state.edit_config = config;
     taskEXIT_CRITICAL(&s_state_lock);
 
     ESP_LOGI(TAG,
@@ -668,18 +638,36 @@ static esp_err_t csi_tx_init_button(void)
     return gpio_config(&io_config);
 }
 
-static csi_tx_menu_item_t csi_tx_menu_item_next(csi_tx_menu_item_t item, const csi_tx_config_t *config)
+static csi_tx_menu_item_t csi_tx_get_next_menu_item(csi_tx_menu_item_t item, const csi_tx_config_t *config)
 {
     csi_tx_menu_item_t next = item;
 
     do {
-        next = (csi_tx_menu_item_t)(((int)next + 1) % ((int)CSI_TX_MENU_ITEM_TX_POWER + 1));
-    } while (next == CSI_TX_MENU_ITEM_SECONDARY && !csi_tx_modulation_supports_secondary(config->modulation));
+        next = (csi_tx_menu_item_t)(((int)next + 1) % ((int)CSI_TX_MENU_TX_POWER + 1));
+    } while (next == CSI_TX_MENU_SECONDARY && !csi_tx_has_secondary_channel(config->modulation));
 
     return next;
 }
 
-static csi_tx_modulation_t csi_tx_next_modulation(csi_tx_modulation_t modulation)
+static uint8_t csi_tx_get_menu_item_count(const csi_tx_config_t *config)
+{
+    return csi_tx_has_secondary_channel(config->modulation) ? 7 : 6;
+}
+
+static uint8_t csi_tx_get_menu_item_position(csi_tx_menu_item_t item, const csi_tx_config_t *config)
+{
+    csi_tx_menu_item_t cursor = CSI_TX_MENU_CHANNEL;
+    uint8_t index = 1;
+
+    while (cursor != item && index < 7) {
+        cursor = csi_tx_get_next_menu_item(cursor, config);
+        index++;
+    }
+
+    return index;
+}
+
+static csi_tx_modulation_t csi_tx_get_next_modulation(csi_tx_modulation_t modulation)
 {
     static const csi_tx_modulation_t modulations[] = {
         CSI_TX_MOD_11B,
@@ -701,215 +689,183 @@ static csi_tx_modulation_t csi_tx_next_modulation(csi_tx_modulation_t modulation
     return modulations[0];
 }
 
-static uint32_t csi_tx_next_interval_ms(uint32_t value)
+static uint32_t csi_tx_get_next_interval_ms(uint32_t value)
 {
-    for (size_t i = 0; i < sizeof(s_interval_options_ms) / sizeof(s_interval_options_ms[0]); ++i) {
+    size_t count = sizeof(s_interval_options_ms) / sizeof(s_interval_options_ms[0]);
+
+    for (size_t i = 0; i < count; ++i) {
         if (s_interval_options_ms[i] >= value) {
-            return s_interval_options_ms[(i + 1U) % (sizeof(s_interval_options_ms) / sizeof(s_interval_options_ms[0]))];
+            return s_interval_options_ms[(i + 1U) % count];
         }
     }
+
     return s_interval_options_ms[0];
 }
 
-static int8_t csi_tx_next_tx_power_qdbm(int8_t value)
+static int8_t csi_tx_get_next_tx_power_qdbm(int8_t value)
 {
-    for (size_t i = 0; i < sizeof(s_tx_power_options_qdbm) / sizeof(s_tx_power_options_qdbm[0]); ++i) {
+    size_t count = sizeof(s_tx_power_options_qdbm) / sizeof(s_tx_power_options_qdbm[0]);
+
+    for (size_t i = 0; i < count; ++i) {
         if (s_tx_power_options_qdbm[i] >= value) {
-            return s_tx_power_options_qdbm[(i + 1U) % (sizeof(s_tx_power_options_qdbm) / sizeof(s_tx_power_options_qdbm[0]))];
+            return s_tx_power_options_qdbm[(i + 1U) % count];
         }
     }
+
     return s_tx_power_options_qdbm[0];
 }
 
 static void csi_tx_cycle_menu_value(csi_tx_config_t *config, csi_tx_menu_item_t item)
 {
+    size_t rate_count = 0;
+
     switch (item) {
-    case CSI_TX_MENU_ITEM_CHANNEL:
+    case CSI_TX_MENU_CHANNEL:
         config->channel++;
         if (config->channel > config->max_channel || config->channel < config->min_channel) {
             config->channel = config->min_channel;
         }
         break;
-    case CSI_TX_MENU_ITEM_TX_INDEX:
+    case CSI_TX_MENU_TX_INDEX:
         config->tx_index = (uint8_t)((config->tx_index % 5U) + 1U);
         break;
-    case CSI_TX_MENU_ITEM_MODULATION:
-        config->modulation = csi_tx_next_modulation(config->modulation);
+    case CSI_TX_MENU_MODULATION:
+        config->modulation = csi_tx_get_next_modulation(config->modulation);
         config->rate_index = 0;
         if (config->modulation == CSI_TX_MOD_HT40 && config->secondary_channel == WIFI_SECOND_CHAN_NONE) {
             config->secondary_channel = WIFI_SECOND_CHAN_ABOVE;
         }
         break;
-    case CSI_TX_MENU_ITEM_RATE:
-        config->rate_index = (config->rate_index + 1) % csi_tx_get_rate_count(config->modulation);
+    case CSI_TX_MENU_RATE:
+        csi_tx_get_rate_table(config->modulation, NULL, NULL, &rate_count);
+        config->rate_index = (config->rate_index + 1) % (int)rate_count;
         break;
-    case CSI_TX_MENU_ITEM_SECONDARY:
-        if (csi_tx_modulation_supports_secondary(config->modulation)) {
-            config->secondary_channel = config->secondary_channel == WIFI_SECOND_CHAN_BELOW ? WIFI_SECOND_CHAN_ABOVE : WIFI_SECOND_CHAN_BELOW;
+    case CSI_TX_MENU_SECONDARY:
+        if (csi_tx_has_secondary_channel(config->modulation)) {
+            config->secondary_channel = config->secondary_channel == WIFI_SECOND_CHAN_BELOW
+                ? WIFI_SECOND_CHAN_ABOVE
+                : WIFI_SECOND_CHAN_BELOW;
         }
         break;
-    case CSI_TX_MENU_ITEM_INTERVAL:
-        config->interval_ms = csi_tx_next_interval_ms(config->interval_ms);
+    case CSI_TX_MENU_INTERVAL:
+        config->interval_ms = csi_tx_get_next_interval_ms(config->interval_ms);
         break;
-    case CSI_TX_MENU_ITEM_TX_POWER:
-        config->max_tx_power_qdbm = csi_tx_next_tx_power_qdbm(config->max_tx_power_qdbm);
-        break;
-    default:
+    case CSI_TX_MENU_TX_POWER:
+        config->max_tx_power_qdbm = csi_tx_get_next_tx_power_qdbm(config->max_tx_power_qdbm);
         break;
     }
 
     csi_tx_resolve_config(config);
 }
 
-static void csi_tx_enter_menu(void)
-{
-    taskENTER_CRITICAL(&s_state_lock);
-    s_ui_state.mode = CSI_TX_UI_MODE_MENU_NAV;
-    s_ui_state.item = CSI_TX_MENU_ITEM_CHANNEL;
-    s_ui_state.edit_config = s_config;
-    s_ui_state.long_press_preview = false;
-    taskEXIT_CRITICAL(&s_state_lock);
-}
-
-static void csi_tx_exit_menu(void)
-{
-    taskENTER_CRITICAL(&s_state_lock);
-    s_ui_state.mode = CSI_TX_UI_MODE_HOME;
-    s_ui_state.edit_config = s_config;
-    s_ui_state.long_press_preview = false;
-    taskEXIT_CRITICAL(&s_state_lock);
-}
-
-static void csi_tx_begin_edit(void)
-{
-    taskENTER_CRITICAL(&s_state_lock);
-    s_ui_state.mode = CSI_TX_UI_MODE_MENU_EDIT;
-    s_ui_state.edit_config = s_config;
-    s_ui_state.long_press_preview = false;
-    taskEXIT_CRITICAL(&s_state_lock);
-}
-
-static void csi_tx_commit_edit(void)
-{
-    csi_tx_config_t config;
-
-    taskENTER_CRITICAL(&s_state_lock);
-    config = s_ui_state.edit_config;
-    taskEXIT_CRITICAL(&s_state_lock);
-
-    if (csi_tx_apply_runtime_config(config) == ESP_OK) {
-        taskENTER_CRITICAL(&s_state_lock);
-        s_ui_state.mode = CSI_TX_UI_MODE_MENU_NAV;
-        s_ui_state.edit_config = s_config;
-        s_ui_state.long_press_preview = false;
-        taskEXIT_CRITICAL(&s_state_lock);
-    }
-}
-
 static bool csi_tx_menu_item_is_last(csi_tx_menu_item_t item, const csi_tx_config_t *config)
 {
-    return item == CSI_TX_MENU_ITEM_TX_POWER ||
-           (item == CSI_TX_MENU_ITEM_INTERVAL && !csi_tx_modulation_supports_secondary(config->modulation));
+    return item == CSI_TX_MENU_TX_POWER ||
+           (item == CSI_TX_MENU_INTERVAL && !csi_tx_has_secondary_channel(config->modulation));
 }
 
-static void csi_tx_handle_button_event(bool long_press)
+static const char *csi_tx_get_menu_title(csi_tx_menu_item_t item)
 {
-    csi_tx_ui_state_t ui_state;
-    csi_tx_config_t config;
+    switch (item) {
+    case CSI_TX_MENU_CHANNEL:
+        return "Channel";
+    case CSI_TX_MENU_TX_INDEX:
+        return "TX Index";
+    case CSI_TX_MENU_MODULATION:
+        return "Modulation";
+    case CSI_TX_MENU_RATE:
+        return "Rate";
+    case CSI_TX_MENU_SECONDARY:
+        return "Secondary";
+    case CSI_TX_MENU_INTERVAL:
+        return "Interval";
+    case CSI_TX_MENU_TX_POWER:
+        return "TX Power";
+    default:
+        return "Setup";
+    }
+}
 
-    taskENTER_CRITICAL(&s_state_lock);
-    ui_state = s_ui_state;
-    config = s_config;
-    taskEXIT_CRITICAL(&s_state_lock);
+static void csi_tx_format_tx_power(char *buffer, size_t size, int8_t power_qdbm)
+{
+    int whole_dbm = power_qdbm / 4;
+    int frac_dbm = (power_qdbm % 4) * 25;
 
-    switch (ui_state.mode) {
-    case CSI_TX_UI_MODE_HOME:
-        if (!long_press) {
-            csi_tx_enter_menu();
-        }
+    snprintf(buffer, size, "%d.%02ddBm", whole_dbm, frac_dbm);
+}
+
+static void csi_tx_format_status(char *buffer, size_t size, const csi_tx_config_t *config)
+{
+    char power[16];
+
+    csi_tx_format_tx_power(power, sizeof(power), config->max_tx_power_qdbm);
+
+    if (config->bandwidth == WIFI_BW40) {
+        snprintf(buffer,
+                 size,
+                 "TX %u | CH %u | %s | %s | SEC %s | INT %" PRIu32 "ms | PWR %s",
+                 config->tx_index,
+                 config->channel,
+                 config->modulation_name,
+                 config->rate_name,
+                 config->secondary_channel == WIFI_SECOND_CHAN_ABOVE ? "ABOVE" : "BELOW",
+                 config->interval_ms,
+                 power);
+        return;
+    }
+
+    snprintf(buffer,
+             size,
+             "TX %u | CH %u | %s | %s | INT %" PRIu32 "ms | PWR %s",
+             config->tx_index,
+             config->channel,
+             config->modulation_name,
+             config->rate_name,
+             config->interval_ms,
+             power);
+}
+
+static void csi_tx_format_menu_value(char *buffer,
+                                     size_t size,
+                                     csi_tx_menu_item_t item,
+                                     const csi_tx_config_t *config)
+{
+    switch (item) {
+    case CSI_TX_MENU_CHANNEL:
+        snprintf(buffer, size, "%u", config->channel);
         break;
-    case CSI_TX_UI_MODE_MENU_NAV:
-        if (long_press) {
-            csi_tx_begin_edit();
-        } else {
-            if (csi_tx_menu_item_is_last(ui_state.item, &config)) {
-                csi_tx_exit_menu();
-            } else {
-                taskENTER_CRITICAL(&s_state_lock);
-                s_ui_state.item = csi_tx_menu_item_next(s_ui_state.item, &s_config);
-                s_ui_state.long_press_preview = false;
-                taskEXIT_CRITICAL(&s_state_lock);
-            }
-        }
+    case CSI_TX_MENU_TX_INDEX:
+        snprintf(buffer, size, "%u", config->tx_index);
         break;
-    case CSI_TX_UI_MODE_MENU_EDIT:
-        if (long_press) {
-            csi_tx_commit_edit();
-        } else {
-            taskENTER_CRITICAL(&s_state_lock);
-            csi_tx_cycle_menu_value(&s_ui_state.edit_config, s_ui_state.item);
-            taskEXIT_CRITICAL(&s_state_lock);
-        }
+    case CSI_TX_MENU_MODULATION:
+        snprintf(buffer, size, "%s", config->modulation_name);
+        break;
+    case CSI_TX_MENU_RATE:
+        snprintf(buffer, size, "%s", config->rate_name);
+        break;
+    case CSI_TX_MENU_SECONDARY:
+        snprintf(buffer, size, "%s",
+                 config->secondary_channel == WIFI_SECOND_CHAN_ABOVE ? "ABOVE" : "BELOW");
+        break;
+    case CSI_TX_MENU_INTERVAL:
+        snprintf(buffer, size, "%" PRIu32 "ms", config->interval_ms);
+        break;
+    case CSI_TX_MENU_TX_POWER:
+        csi_tx_format_tx_power(buffer, size, config->max_tx_power_qdbm);
         break;
     default:
+        buffer[0] = '\0';
         break;
     }
-
-    taskENTER_CRITICAL(&s_state_lock);
-    s_ui_state.long_press_preview = false;
-    taskEXIT_CRITICAL(&s_state_lock);
-}
-
-static void csi_tx_poll_button(void)
-{
-    static bool last_raw_pressed;
-    static bool stable_pressed;
-    static int64_t last_change_us;
-    static int64_t press_started_us;
-    static bool long_press_triggered;
-
-    bool raw_pressed = csi_tx_button_pressed();
-    int64_t now_us = esp_timer_get_time();
-
-    if (raw_pressed != last_raw_pressed) {
-        last_raw_pressed = raw_pressed;
-        last_change_us = now_us;
-        return;
-    }
-
-    if ((now_us - last_change_us) < CSI_TX_BUTTON_DEBOUNCE_US || raw_pressed == stable_pressed) {
-        if (stable_pressed && !long_press_triggered && (now_us - press_started_us) >= CSI_TX_BUTTON_LONG_PRESS_US) {
-            taskENTER_CRITICAL(&s_state_lock);
-            s_ui_state.long_press_preview = true;
-            taskEXIT_CRITICAL(&s_state_lock);
-            long_press_triggered = true;
-        }
-        return;
-    }
-
-    stable_pressed = raw_pressed;
-    if (stable_pressed) {
-        press_started_us = now_us;
-        long_press_triggered = false;
-        taskENTER_CRITICAL(&s_state_lock);
-        s_ui_state.long_press_preview = false;
-        taskEXIT_CRITICAL(&s_state_lock);
-        return;
-    }
-
-    csi_tx_handle_button_event(long_press_triggered);
-    long_press_triggered = false;
 }
 
 static bool csi_tx_lvgl_flush_ready(esp_lcd_panel_io_handle_t panel_io,
                                     esp_lcd_panel_io_event_data_t *edata,
                                     void *user_ctx)
 {
-    lv_display_t *display = user_ctx;
-
     LV_UNUSED(panel_io);
     LV_UNUSED(edata);
-    lv_display_flush_ready(display);
+    lv_display_flush_ready(user_ctx);
     return false;
 }
 
@@ -980,7 +936,7 @@ static esp_err_t csi_tx_init_display(void)
 
     ESP_RETURN_ON_ERROR(gpio_config(&backlight_config), TAG, "failed to configure backlight");
     ESP_RETURN_ON_ERROR(gpio_set_level(CSI_TX_LCD_PIN_BL, CSI_TX_LCD_BL_OFF_LEVEL), TAG, "failed to disable backlight");
-    ESP_RETURN_ON_ERROR(spi_bus_initialize(CSI_TX_LCD_HOST, &buscfg, SPI_DMA_CH_AUTO), TAG, "failed to init LCD SPI bus");
+    ESP_RETURN_ON_ERROR(spi_bus_initialize(CSI_TX_LCD_HOST, &buscfg, SPI_DMA_CH_AUTO), TAG, "failed to init SPI bus");
     ESP_RETURN_ON_ERROR(csi_tx_init_led(), TAG, "failed to init LED");
     ESP_RETURN_ON_ERROR(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)CSI_TX_LCD_HOST, &io_config, &s_lcd_io),
                         TAG, "failed to create panel IO");
@@ -995,8 +951,8 @@ static esp_err_t csi_tx_init_display(void)
     ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(s_lcd_panel, true), TAG, "failed to enable panel");
 
     lv_init();
-
     s_lv_display = lv_display_create(CSI_TX_LCD_H_RES, CSI_TX_LCD_V_RES);
+
     buf1 = spi_bus_dma_memory_alloc(CSI_TX_LCD_HOST, draw_buffer_sz, 0);
     buf2 = spi_bus_dma_memory_alloc(CSI_TX_LCD_HOST, draw_buffer_sz, 0);
     if (buf1 == NULL || buf2 == NULL) {
@@ -1019,247 +975,252 @@ static esp_err_t csi_tx_init_display(void)
     return ESP_OK;
 }
 
-static void csi_tx_build_marquee(char *buffer, size_t buffer_size, const csi_tx_config_t *config)
-{
-    int whole_dbm = config->max_tx_power_qdbm / 4;
-    int frac_dbm = (config->max_tx_power_qdbm % 4) * 25;
-
-    if (config->bandwidth == WIFI_BW40) {
-        snprintf(buffer,
-                 buffer_size,
-                 "TX %u | CH %u | %s | %s | SEC %s | INT %" PRIu32 "ms | PWR %d.%02ddBm",
-                 config->tx_index,
-                 config->channel,
-                 config->modulation_name,
-                 config->rate_name,
-                 config->secondary_channel == WIFI_SECOND_CHAN_ABOVE ? "ABOVE" : "BELOW",
-                 config->interval_ms,
-                 whole_dbm,
-                 frac_dbm);
-        return;
-    }
-
-    snprintf(buffer,
-             buffer_size,
-             "TX %u | CH %u | %s | %s | INT %" PRIu32 "ms | PWR %d.%02ddBm",
-             config->tx_index,
-             config->channel,
-             config->modulation_name,
-             config->rate_name,
-             config->interval_ms,
-             whole_dbm,
-             frac_dbm);
-}
-
-static const char *csi_tx_get_menu_title(csi_tx_menu_item_t item)
-{
-    switch (item) {
-    case CSI_TX_MENU_ITEM_CHANNEL: return "Channel";
-    case CSI_TX_MENU_ITEM_TX_INDEX: return "TX Index";
-    case CSI_TX_MENU_ITEM_MODULATION: return "Modulation";
-    case CSI_TX_MENU_ITEM_RATE: return "Rate";
-    case CSI_TX_MENU_ITEM_SECONDARY: return "Secondary";
-    case CSI_TX_MENU_ITEM_INTERVAL: return "Interval";
-    case CSI_TX_MENU_ITEM_TX_POWER: return "TX Power";
-    default: return "Setup";
-    }
-}
-
-static void csi_tx_get_menu_value(char *buffer, size_t buffer_size, csi_tx_menu_item_t item, const csi_tx_config_t *config)
-{
-    int whole_dbm = config->max_tx_power_qdbm / 4;
-    int frac_dbm = (config->max_tx_power_qdbm % 4) * 25;
-
-    switch (item) {
-    case CSI_TX_MENU_ITEM_CHANNEL:
-        snprintf(buffer, buffer_size, "%u", config->channel);
-        break;
-    case CSI_TX_MENU_ITEM_TX_INDEX:
-        snprintf(buffer, buffer_size, "%u", config->tx_index);
-        break;
-    case CSI_TX_MENU_ITEM_MODULATION:
-        snprintf(buffer, buffer_size, "%s", config->modulation_name);
-        break;
-    case CSI_TX_MENU_ITEM_RATE:
-        snprintf(buffer, buffer_size, "%s", config->rate_name);
-        break;
-    case CSI_TX_MENU_ITEM_SECONDARY:
-        snprintf(buffer, buffer_size, "%s",
-                 config->secondary_channel == WIFI_SECOND_CHAN_ABOVE ? "ABOVE" : "BELOW");
-        break;
-    case CSI_TX_MENU_ITEM_INTERVAL:
-        snprintf(buffer, buffer_size, "%" PRIu32 "ms", config->interval_ms);
-        break;
-    case CSI_TX_MENU_ITEM_TX_POWER:
-        snprintf(buffer, buffer_size, "%d.%02ddBm", whole_dbm, frac_dbm);
-        break;
-    default:
-        buffer[0] = '\0';
-        break;
-    }
-}
-
-static uint8_t csi_tx_get_menu_item_position(csi_tx_menu_item_t item, const csi_tx_config_t *config)
-{
-    csi_tx_menu_item_t cursor = CSI_TX_MENU_ITEM_CHANNEL;
-    uint8_t position = 1;
-
-    while (cursor != item) {
-        cursor = csi_tx_menu_item_next(cursor, config);
-        position++;
-        if (position > 7) {
-            break;
-        }
-    }
-
-    return position;
-}
-
-static uint8_t csi_tx_get_menu_item_count(const csi_tx_config_t *config)
-{
-    return csi_tx_modulation_supports_secondary(config->modulation) ? 7 : 6;
-}
-
 static void csi_tx_init_ui(void)
 {
     lv_obj_t *screen = lv_display_get_screen_active(s_lv_display);
 
-    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(screen, lv_color_black(), 0);
+    lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
 
-    s_home_container = lv_obj_create(screen);
-    lv_obj_remove_style_all(s_home_container);
-    lv_obj_set_size(s_home_container, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_opa(s_home_container, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(s_home_container, lv_color_hex(csi_tx_get_tx_color(1)), 0);
-
-    s_menu_container = lv_obj_create(screen);
-    lv_obj_remove_style_all(s_menu_container);
-    lv_obj_set_size(s_menu_container, LV_PCT(100), LV_PCT(100));
-    lv_obj_set_style_bg_color(s_menu_container, lv_color_black(), 0);
-    lv_obj_set_style_bg_opa(s_menu_container, LV_OPA_COVER, 0);
-    lv_obj_add_flag(s_menu_container, LV_OBJ_FLAG_HIDDEN);
+    s_home_screen = lv_obj_create(screen);
+    lv_obj_remove_style_all(s_home_screen);
+    lv_obj_set_size(s_home_screen, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_opa(s_home_screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_home_screen, lv_color_hex(csi_tx_get_tx_color(1)), 0);
 
     csi_tx_prepare_home_logo();
 
-    s_home_logo = lv_image_create(s_home_container);
+    s_home_logo = lv_image_create(s_home_screen);
     lv_image_set_src(s_home_logo, &s_home_logo_image);
     lv_obj_align(s_home_logo, LV_ALIGN_TOP_MID, 0, CSI_TX_HOME_LOGO_OFFSET_Y);
     lv_obj_set_style_bg_opa(s_home_logo, LV_OPA_TRANSP, 0);
 
-    s_marquee_label = lv_label_create(s_home_container);
-    lv_obj_set_width(s_marquee_label, 148);
-    lv_label_set_long_mode(s_marquee_label, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-    lv_obj_set_style_anim_duration(s_marquee_label, 12000, 0);
-    lv_obj_align(s_marquee_label, LV_ALIGN_BOTTOM_LEFT, 6, -4);
-    lv_obj_set_style_text_color(s_marquee_label, lv_color_white(), 0);
+    s_home_status = lv_label_create(s_home_screen);
+    lv_obj_set_width(s_home_status, 148);
+    lv_label_set_long_mode(s_home_status, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
+    lv_obj_set_style_anim_duration(s_home_status, 12000, 0);
+    lv_obj_set_style_text_color(s_home_status, lv_color_white(), 0);
+    lv_obj_align(s_home_status, LV_ALIGN_BOTTOM_LEFT, 6, -4);
 
-    s_menu_header_label = lv_label_create(s_menu_container);
-    lv_obj_set_width(s_menu_header_label, 148);
-    lv_obj_set_style_text_align(s_menu_header_label, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(s_menu_header_label, LV_ALIGN_TOP_LEFT, 6, 4);
-    lv_obj_set_style_text_color(s_menu_header_label, lv_color_white(), 0);
+    s_menu_screen = lv_obj_create(screen);
+    lv_obj_remove_style_all(s_menu_screen);
+    lv_obj_set_size(s_menu_screen, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_opa(s_menu_screen, LV_OPA_COVER, 0);
+    lv_obj_set_style_bg_color(s_menu_screen, lv_color_black(), 0);
+    lv_obj_add_flag(s_menu_screen, LV_OBJ_FLAG_HIDDEN);
 
-    s_menu_body_label = lv_label_create(s_menu_container);
-    lv_obj_set_width(s_menu_body_label, 148);
-    lv_label_set_long_mode(s_menu_body_label, LV_LABEL_LONG_MODE_CLIP);
-    lv_obj_set_style_text_align(s_menu_body_label, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(s_menu_body_label, LV_ALIGN_TOP_LEFT, 6, 24);
-    lv_obj_set_style_text_color(s_menu_body_label, lv_color_white(), 0);
+    s_menu_header = lv_label_create(s_menu_screen);
+    lv_obj_set_width(s_menu_header, 148);
+    lv_obj_set_style_text_color(s_menu_header, lv_color_white(), 0);
+    lv_obj_align(s_menu_header, LV_ALIGN_TOP_LEFT, 6, 6);
 
-    s_menu_hint_label = lv_label_create(s_menu_container);
-    lv_obj_set_width(s_menu_hint_label, 148);
-    lv_obj_set_style_text_align(s_menu_hint_label, LV_TEXT_ALIGN_LEFT, 0);
-    lv_obj_align(s_menu_hint_label, LV_ALIGN_BOTTOM_LEFT, 6, -4);
-    lv_obj_set_style_text_color(s_menu_hint_label, lv_color_white(), 0);
-    lv_label_set_text(s_menu_hint_label, "");
+    s_menu_body = lv_label_create(s_menu_screen);
+    lv_obj_set_width(s_menu_body, 148);
+    lv_obj_set_style_text_color(s_menu_body, lv_color_white(), 0);
+    lv_obj_align(s_menu_body, LV_ALIGN_TOP_LEFT, 6, 34);
 }
 
 static void csi_tx_ui_task(void *arg)
 {
-    uint32_t last_home_color = 0;
-    uint32_t last_led_color = 0;
+    uint32_t last_color = UINT32_MAX;
+    uint32_t last_led_color = UINT32_MAX;
     csi_tx_ui_mode_t last_mode = (csi_tx_ui_mode_t)-1;
-    char last_marquee[192] = "";
+    char last_status[192] = "";
     char last_header[24] = "";
-    char last_menu_body[96] = "";
+    char last_body[96] = "";
 
     LV_UNUSED(arg);
     csi_tx_init_ui();
 
     while (true) {
-        csi_tx_ui_snapshot_t snapshot = csi_tx_get_ui_snapshot();
-        char marquee[192];
-        char menu_value[48];
-        char menu_body[96];
+        csi_tx_state_t snapshot = csi_tx_get_state_copy();
+        csi_tx_config_t view_config = snapshot.ui_mode == CSI_TX_UI_EDIT ? snapshot.edit_config : snapshot.active_config;
+        char status[192];
         char header[24];
-        uint8_t item_position = csi_tx_get_menu_item_position(snapshot.ui_state.item, &snapshot.preview_config);
-        uint8_t item_count = csi_tx_get_menu_item_count(&snapshot.preview_config);
-        bool ui_changed = false;
+        char value[48];
+        char body[96];
 
-        if (snapshot.active_config.accent_rgb != last_home_color) {
-            lv_obj_set_style_bg_color(s_home_container, lv_color_hex(snapshot.active_config.accent_rgb), 0);
-            last_home_color = snapshot.active_config.accent_rgb;
-            ui_changed = true;
+        csi_tx_format_status(status, sizeof(status), &view_config);
+
+        if (view_config.accent_rgb != last_color) {
+            lv_obj_set_style_bg_color(s_home_screen, lv_color_hex(view_config.accent_rgb), 0);
+            last_color = view_config.accent_rgb;
         }
 
-        csi_tx_build_marquee(marquee, sizeof(marquee), &snapshot.preview_config);
-
-        if (snapshot.ui_state.mode == CSI_TX_UI_MODE_HOME) {
-            if (last_mode != CSI_TX_UI_MODE_HOME) {
-                lv_obj_clear_flag(s_home_container, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_add_flag(s_menu_container, LV_OBJ_FLAG_HIDDEN);
-                last_mode = CSI_TX_UI_MODE_HOME;
-                ui_changed = true;
+        if (snapshot.ui_mode == CSI_TX_UI_HOME) {
+            if (last_mode != CSI_TX_UI_HOME) {
+                lv_obj_clear_flag(s_home_screen, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_menu_screen, LV_OBJ_FLAG_HIDDEN);
+                last_mode = CSI_TX_UI_HOME;
             }
-            if (strcmp(last_marquee, marquee) != 0) {
-                lv_label_set_text(s_marquee_label, marquee);
-                snprintf(last_marquee, sizeof(last_marquee), "%s", marquee);
-                ui_changed = true;
+            if (strcmp(status, last_status) != 0) {
+                lv_label_set_text(s_home_status, status);
+                snprintf(last_status, sizeof(last_status), "%s", status);
             }
         } else {
-            if (last_mode != snapshot.ui_state.mode) {
-                lv_obj_add_flag(s_home_container, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_clear_flag(s_menu_container, LV_OBJ_FLAG_HIDDEN);
-                last_mode = snapshot.ui_state.mode;
-                ui_changed = true;
+            uint8_t position = csi_tx_get_menu_item_position(snapshot.menu_item, &view_config);
+            uint8_t count = csi_tx_get_menu_item_count(&view_config);
+
+            if (last_mode != snapshot.ui_mode) {
+                lv_obj_add_flag(s_home_screen, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_clear_flag(s_menu_screen, LV_OBJ_FLAG_HIDDEN);
+                last_mode = snapshot.ui_mode;
             }
+
             snprintf(header,
                      sizeof(header),
                      "%s %u/%u",
-                     snapshot.ui_state.long_press_preview
-                         ? (snapshot.ui_state.mode == CSI_TX_UI_MODE_MENU_EDIT ? "SETUP" : "EDIT")
-                         : (snapshot.ui_state.mode == CSI_TX_UI_MODE_MENU_EDIT ? "EDIT" : "SETUP"),
-                     item_position,
-                     item_count);
-            csi_tx_get_menu_value(menu_value, sizeof(menu_value), snapshot.ui_state.item, &snapshot.preview_config);
-            snprintf(menu_body,
-                     sizeof(menu_body),
-                     "%s\n\n%s",
-                     csi_tx_get_menu_title(snapshot.ui_state.item),
-                     menu_value);
-            if (strcmp(last_header, header) != 0) {
-                lv_label_set_text(s_menu_header_label, header);
+                     snapshot.long_press_preview
+                         ? (snapshot.ui_mode == CSI_TX_UI_EDIT ? "APPLY" : "EDIT")
+                         : (snapshot.ui_mode == CSI_TX_UI_EDIT ? "EDIT" : "SETUP"),
+                     position,
+                     count);
+            csi_tx_format_menu_value(value, sizeof(value), snapshot.menu_item, &view_config);
+            snprintf(body, sizeof(body), "%s\n\n%s", csi_tx_get_menu_title(snapshot.menu_item), value);
+
+            if (strcmp(header, last_header) != 0) {
+                lv_label_set_text(s_menu_header, header);
                 snprintf(last_header, sizeof(last_header), "%s", header);
-                ui_changed = true;
             }
-            if (strcmp(last_menu_body, menu_body) != 0) {
-                lv_label_set_text(s_menu_body_label, menu_body);
-                snprintf(last_menu_body, sizeof(last_menu_body), "%s", menu_body);
-                ui_changed = true;
+            if (strcmp(body, last_body) != 0) {
+                lv_label_set_text(s_menu_body, body);
+                snprintf(last_body, sizeof(last_body), "%s", body);
             }
         }
 
         lv_timer_handler();
-        if (snapshot.ui_state.mode == CSI_TX_UI_MODE_HOME) {
-            csi_tx_set_led_rgb(snapshot.preview_config.accent_rgb);
-            last_led_color = snapshot.preview_config.accent_rgb;
-        } else if (ui_changed || snapshot.preview_config.accent_rgb != last_led_color) {
-            csi_tx_set_led_rgb(snapshot.preview_config.accent_rgb);
-            last_led_color = snapshot.preview_config.accent_rgb;
+
+        if (view_config.accent_rgb != last_led_color) {
+            csi_tx_set_led_rgb(view_config.accent_rgb);
+            last_led_color = view_config.accent_rgb;
         }
+
         vTaskDelay(pdMS_TO_TICKS(CSI_TX_UI_REFRESH_MS));
     }
+}
+
+static void csi_tx_enter_menu(void)
+{
+    taskENTER_CRITICAL(&s_state_lock);
+    s_state.ui_mode = CSI_TX_UI_MENU;
+    s_state.menu_item = CSI_TX_MENU_CHANNEL;
+    s_state.edit_config = s_state.active_config;
+    s_state.long_press_preview = false;
+    taskEXIT_CRITICAL(&s_state_lock);
+}
+
+static void csi_tx_exit_menu(void)
+{
+    taskENTER_CRITICAL(&s_state_lock);
+    s_state.ui_mode = CSI_TX_UI_HOME;
+    s_state.edit_config = s_state.active_config;
+    s_state.long_press_preview = false;
+    taskEXIT_CRITICAL(&s_state_lock);
+}
+
+static void csi_tx_begin_edit(void)
+{
+    taskENTER_CRITICAL(&s_state_lock);
+    s_state.ui_mode = CSI_TX_UI_EDIT;
+    s_state.edit_config = s_state.active_config;
+    s_state.long_press_preview = false;
+    taskEXIT_CRITICAL(&s_state_lock);
+}
+
+static void csi_tx_commit_edit(void)
+{
+    csi_tx_config_t config;
+
+    taskENTER_CRITICAL(&s_state_lock);
+    config = s_state.edit_config;
+    taskEXIT_CRITICAL(&s_state_lock);
+
+    if (csi_tx_apply_runtime_config(config) == ESP_OK) {
+        taskENTER_CRITICAL(&s_state_lock);
+        s_state.ui_mode = CSI_TX_UI_MENU;
+        s_state.long_press_preview = false;
+        taskEXIT_CRITICAL(&s_state_lock);
+    }
+}
+
+static void csi_tx_handle_button_event(bool long_press)
+{
+    csi_tx_state_t snapshot = csi_tx_get_state_copy();
+
+    switch (snapshot.ui_mode) {
+    case CSI_TX_UI_HOME:
+        if (!long_press) {
+            csi_tx_enter_menu();
+        }
+        break;
+    case CSI_TX_UI_MENU:
+        if (long_press) {
+            csi_tx_begin_edit();
+        } else if (csi_tx_menu_item_is_last(snapshot.menu_item, &snapshot.active_config)) {
+            csi_tx_exit_menu();
+        } else {
+            taskENTER_CRITICAL(&s_state_lock);
+            s_state.menu_item = csi_tx_get_next_menu_item(s_state.menu_item, &s_state.active_config);
+            s_state.long_press_preview = false;
+            taskEXIT_CRITICAL(&s_state_lock);
+        }
+        break;
+    case CSI_TX_UI_EDIT:
+        if (long_press) {
+            csi_tx_commit_edit();
+        } else {
+            taskENTER_CRITICAL(&s_state_lock);
+            csi_tx_cycle_menu_value(&s_state.edit_config, s_state.menu_item);
+            s_state.long_press_preview = false;
+            taskEXIT_CRITICAL(&s_state_lock);
+        }
+        break;
+    }
+
+    taskENTER_CRITICAL(&s_state_lock);
+    s_state.long_press_preview = false;
+    taskEXIT_CRITICAL(&s_state_lock);
+}
+
+static void csi_tx_poll_button(void)
+{
+    static bool last_raw_pressed;
+    static bool stable_pressed;
+    static int64_t last_change_us;
+    static int64_t press_started_us;
+    static bool long_press_triggered;
+
+    bool raw_pressed = csi_tx_button_pressed();
+    int64_t now_us = esp_timer_get_time();
+
+    if (raw_pressed != last_raw_pressed) {
+        last_raw_pressed = raw_pressed;
+        last_change_us = now_us;
+        return;
+    }
+
+    if ((now_us - last_change_us) < CSI_TX_BUTTON_DEBOUNCE_US || raw_pressed == stable_pressed) {
+        if (stable_pressed && !long_press_triggered && (now_us - press_started_us) >= CSI_TX_BUTTON_LONG_PRESS_US) {
+            taskENTER_CRITICAL(&s_state_lock);
+            s_state.long_press_preview = true;
+            taskEXIT_CRITICAL(&s_state_lock);
+            long_press_triggered = true;
+        }
+        return;
+    }
+
+    stable_pressed = raw_pressed;
+    if (stable_pressed) {
+        press_started_us = now_us;
+        long_press_triggered = false;
+        taskENTER_CRITICAL(&s_state_lock);
+        s_state.long_press_preview = false;
+        taskEXIT_CRITICAL(&s_state_lock);
+        return;
+    }
+
+    csi_tx_handle_button_event(long_press_triggered);
+    long_press_triggered = false;
 }
 
 void app_main(void)
@@ -1270,34 +1231,34 @@ void app_main(void)
     TickType_t last_status_tick;
     TickType_t status_period_ticks = pdMS_TO_TICKS(CSI_TX_STATUS_PERIOD_MS);
 
-    s_config = csi_tx_get_default_config();
-    s_runtime.current_channel = s_config.channel;
-    s_ui_state.mode = CSI_TX_UI_MODE_HOME;
-    s_ui_state.item = CSI_TX_MENU_ITEM_CHANNEL;
-    s_ui_state.edit_config = s_config;
+    memset(&s_state, 0, sizeof(s_state));
+    s_state.active_config = csi_tx_get_default_config();
+    s_state.edit_config = s_state.active_config;
+    s_state.ui_mode = CSI_TX_UI_HOME;
+    s_state.menu_item = CSI_TX_MENU_CHANNEL;
+    s_state.current_channel = s_state.active_config.channel;
 
     esp_log_level_set("*", ESP_LOG_INFO);
-    csi_tx_console_warmup();
     ESP_ERROR_CHECK(csi_tx_init_nvs());
     ESP_ERROR_CHECK(csi_tx_init_button());
 
-    if (csi_tx_init_display() != ESP_OK) {
-        ESP_LOGW(TAG, "display init failed, continuing without TFT output");
-    } else {
+    if (csi_tx_init_display() == ESP_OK) {
         xTaskCreate(csi_tx_ui_task, "csi_tx_ui", 8192, NULL, 2, NULL);
+    } else {
+        ESP_LOGW(TAG, "display init failed, continuing without TFT output");
     }
 
     csi_tx_prepare_frame();
-    csi_tx_update_frame_identity(s_config.tx_index);
-    csi_tx_set_led_rgb(s_config.accent_rgb);
+    csi_tx_update_frame_identity(s_state.active_config.tx_index);
+    csi_tx_set_led_rgb(s_state.active_config.accent_rgb);
     ESP_ERROR_CHECK(csi_tx_init_wifi());
-    csi_tx_log_config();
+    csi_tx_log_config(&s_state.active_config);
 
     last_wake_tick = xTaskGetTickCount();
     last_status_tick = last_wake_tick;
 
     while (true) {
-        csi_tx_config_t config = csi_tx_get_config_snapshot();
+        csi_tx_config_t config = csi_tx_get_active_config();
         esp_err_t err;
 
         csi_tx_poll_button();
@@ -1313,18 +1274,18 @@ void app_main(void)
         }
 
         sequence++;
-        csi_tx_note_tx_result(sequence, tx_failures);
+        csi_tx_set_runtime_stats(sequence, tx_failures, config.channel);
 
         {
             TickType_t now_tick = xTaskGetTickCount();
             if ((now_tick - last_status_tick) >= status_period_ticks) {
-                csi_tx_runtime_t snapshot = csi_tx_get_runtime_snapshot();
+                csi_tx_state_t snapshot = csi_tx_get_state_copy();
                 ESP_LOGI(TAG,
                          "tx_count=%" PRIu32 " tx_failures=%" PRIu32 " channel=%u tx=%u",
                          snapshot.tx_count,
                          snapshot.tx_failures,
                          snapshot.current_channel,
-                         config.tx_index);
+                         snapshot.active_config.tx_index);
                 last_status_tick = now_tick;
             }
         }

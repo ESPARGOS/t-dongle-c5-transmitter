@@ -20,9 +20,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lvgl.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 
 static const char *TAG = "csi_tx";
+static const char *NVS_NAMESPACE = "csi_tx";
+static const char *NVS_CONFIG_KEY = "config";
 
 #define CSI_TX_LCD_HOST SPI2_HOST
 #define CSI_TX_LCD_H_RES 80
@@ -120,6 +123,21 @@ typedef struct {
     uint32_t tx_count;
     uint32_t tx_failures;
 } csi_tx_state_t;
+
+typedef struct {
+    uint32_t magic;
+    uint16_t version;
+    uint8_t modulation;
+    uint8_t channel;
+    uint8_t tx_index;
+    int8_t secondary_channel;
+    uint32_t interval_ms;
+    int8_t max_tx_power_qdbm;
+    int32_t rate_index;
+} csi_tx_persisted_config_t;
+
+#define CSI_TX_CONFIG_MAGIC 0x43534954UL
+#define CSI_TX_CONFIG_VERSION 1U
 
 static const uint32_t s_interval_options_ms[] = {
     1, 2, 5, 7, 10, 11, 13, 15, 16, 20, 25, 50, 100, 200, 500, 1000,
@@ -429,6 +447,83 @@ static csi_tx_config_t csi_tx_get_default_config(void)
     return config;
 }
 
+static csi_tx_persisted_config_t csi_tx_to_persisted_config(const csi_tx_config_t *config)
+{
+    csi_tx_persisted_config_t persisted = {
+        .magic = CSI_TX_CONFIG_MAGIC,
+        .version = CSI_TX_CONFIG_VERSION,
+        .modulation = (uint8_t)config->modulation,
+        .channel = config->channel,
+        .tx_index = config->tx_index,
+        .secondary_channel = (int8_t)config->secondary_channel,
+        .interval_ms = config->interval_ms,
+        .max_tx_power_qdbm = config->max_tx_power_qdbm,
+        .rate_index = config->rate_index,
+    };
+
+    return persisted;
+}
+
+static void csi_tx_apply_persisted_config(csi_tx_config_t *config, const csi_tx_persisted_config_t *persisted)
+{
+    config->modulation = (csi_tx_modulation_t)persisted->modulation;
+    config->channel = persisted->channel;
+    config->tx_index = persisted->tx_index;
+    config->secondary_channel = (wifi_second_chan_t)persisted->secondary_channel;
+    config->interval_ms = persisted->interval_ms;
+    config->max_tx_power_qdbm = persisted->max_tx_power_qdbm;
+    config->rate_index = persisted->rate_index;
+}
+
+static esp_err_t csi_tx_load_config_from_nvs(csi_tx_config_t *config)
+{
+    nvs_handle_t nvs_handle;
+    csi_tx_persisted_config_t persisted;
+    size_t size = sizeof(persisted);
+    esp_err_t err = nvs_open(NVS_NAMESPACE, NVS_READONLY, &nvs_handle);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return err;
+    }
+    ESP_RETURN_ON_ERROR(err, TAG, "failed to open NVS namespace");
+
+    err = nvs_get_blob(nvs_handle, NVS_CONFIG_KEY, &persisted, &size);
+    nvs_close(nvs_handle);
+
+    if (err == ESP_ERR_NVS_NOT_FOUND) {
+        return err;
+    }
+    ESP_RETURN_ON_ERROR(err, TAG, "failed to read config from NVS");
+
+    if (size != sizeof(persisted) ||
+        persisted.magic != CSI_TX_CONFIG_MAGIC ||
+        persisted.version != CSI_TX_CONFIG_VERSION) {
+        ESP_LOGW(TAG, "ignoring invalid persisted config");
+        return ESP_ERR_INVALID_VERSION;
+    }
+
+    csi_tx_apply_persisted_config(config, &persisted);
+    csi_tx_resolve_config(config);
+    ESP_LOGI(TAG, "loaded config from NVS");
+    return ESP_OK;
+}
+
+static esp_err_t csi_tx_save_config_to_nvs(const csi_tx_config_t *config)
+{
+    nvs_handle_t nvs_handle;
+    csi_tx_persisted_config_t persisted = csi_tx_to_persisted_config(config);
+
+    ESP_RETURN_ON_ERROR(nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs_handle), TAG, "failed to open NVS namespace");
+    esp_err_t err = nvs_set_blob(nvs_handle, NVS_CONFIG_KEY, &persisted, sizeof(persisted));
+    if (err == ESP_OK) {
+        err = nvs_commit(nvs_handle);
+    }
+    nvs_close(nvs_handle);
+    ESP_RETURN_ON_ERROR(err, TAG, "failed to save config to NVS");
+
+    return ESP_OK;
+}
+
 static csi_tx_state_t csi_tx_get_state_copy(void)
 {
     csi_tx_state_t snapshot;
@@ -594,6 +689,8 @@ static void csi_tx_set_led_rgb(uint32_t rgb)
 
 static esp_err_t csi_tx_apply_runtime_config(csi_tx_config_t config)
 {
+    esp_err_t persist_err;
+
     csi_tx_resolve_config(&config);
 
     if (s_wifi_ready) {
@@ -609,6 +706,11 @@ static esp_err_t csi_tx_apply_runtime_config(csi_tx_config_t config)
     s_state.active_config = config;
     s_state.edit_config = config;
     taskEXIT_CRITICAL(&s_state_lock);
+
+    persist_err = csi_tx_save_config_to_nvs(&config);
+    if (persist_err != ESP_OK) {
+        ESP_LOGW(TAG, "applied config but failed to persist it: %s", esp_err_to_name(persist_err));
+    }
 
     ESP_LOGI(TAG,
              "applied: tx=%u channel=%u modulation=%s rate=%s interval=%" PRIu32 "ms",
@@ -1230,16 +1332,28 @@ void app_main(void)
     TickType_t last_wake_tick;
     TickType_t last_status_tick;
     TickType_t status_period_ticks = pdMS_TO_TICKS(CSI_TX_STATUS_PERIOD_MS);
+    csi_tx_config_t boot_config;
+    esp_err_t load_err;
 
     memset(&s_state, 0, sizeof(s_state));
-    s_state.active_config = csi_tx_get_default_config();
+    boot_config = csi_tx_get_default_config();
+
+    esp_log_level_set("*", ESP_LOG_INFO);
+    ESP_ERROR_CHECK(csi_tx_init_nvs());
+
+    load_err = csi_tx_load_config_from_nvs(&boot_config);
+    if (load_err == ESP_ERR_NVS_NOT_FOUND) {
+        ESP_LOGI(TAG, "no persisted config found, using menuconfig defaults");
+    } else if (load_err != ESP_OK) {
+        ESP_LOGW(TAG, "using menuconfig defaults after NVS load failure: %s", esp_err_to_name(load_err));
+    }
+
+    s_state.active_config = boot_config;
     s_state.edit_config = s_state.active_config;
     s_state.ui_mode = CSI_TX_UI_HOME;
     s_state.menu_item = CSI_TX_MENU_CHANNEL;
     s_state.current_channel = s_state.active_config.channel;
 
-    esp_log_level_set("*", ESP_LOG_INFO);
-    ESP_ERROR_CHECK(csi_tx_init_nvs());
     ESP_ERROR_CHECK(csi_tx_init_button());
 
     if (csi_tx_init_display() == ESP_OK) {

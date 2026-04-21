@@ -1168,9 +1168,6 @@ CONFIG_CSI_TX_MODULATION_HT20=y
 # CONFIG_CSI_TX_MODULATION_HT40 is not set
 # default:
 # CONFIG_CSI_TX_MODULATION_HE20 is not set
-
-#
-#
 # default:
 CONFIG_CSI_TX_HT_MCS_0=y
 # default:

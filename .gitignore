@@ -1,6 +1,7 @@
+# ESP-IDF / build output
 build/
+managed_components/
 
+# Python cache
 __pycache__/
 *.pyc
-
-todo.txt

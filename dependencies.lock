@@ -1,0 +1,25 @@
+dependencies:
+  idf:
+    source:
+      type: idf
+    version: 6.1.0
+  lvgl/lvgl:
+    component_hash: b702d642e03e95928046d5c6726558e6444e112420c77efa5fdb6650b0a13c5d
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 9.3.0
+  waveshare/esp_lcd_st7735:
+    component_hash: 811c4168555af5878eb9ec8c3eee8af277afebc3bc516bc0daa57656eee09c69
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.1
+direct_dependencies:
+- lvgl/lvgl
+- waveshare/esp_lcd_st7735
+manifest_hash: 303c35d9764855f5be93e91018b6b65dd5341224657bc66b577dc91a2428472c
+target: esp32c5
+version: 3.0.0

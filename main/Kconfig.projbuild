@@ -1,24 +1,184 @@
 menu "CSI transmitter"
 
-config CSI_TX_WIFI_CHANNEL
-    int "Default Wi-Fi channel"
-    range 1 13
-    default 5
+choice CSI_TX_MODULATION
+    prompt "Default modulation format"
+    default CSI_TX_MODULATION_HT20
 
-choice CSI_TX_WIFI_BANDWIDTH
-    prompt "Default bandwidth"
-    default CSI_TX_WIFI_BANDWIDTH_HT20
+config CSI_TX_MODULATION_11B
+    bool "802.11b"
 
-config CSI_TX_WIFI_BANDWIDTH_HT20
-    bool "20 MHz"
+config CSI_TX_MODULATION_11G
+    bool "802.11g"
 
-config CSI_TX_WIFI_BANDWIDTH_HT40
-    bool "40 MHz"
+config CSI_TX_MODULATION_HT20
+    bool "802.11n HT20"
+
+config CSI_TX_MODULATION_HT40
+    bool "802.11n HT40"
+
+config CSI_TX_MODULATION_HE20
+    bool "802.11ax HE20"
+    depends on SOC_WIFI_HE_SUPPORT
 
 endchoice
 
+comment "802.11ax HE40 raw TX is not exposed by the current ESP-IDF API on ESP32-C5"
+    depends on SOC_WIFI_HE_SUPPORT
+
+choice CSI_TX_11B_RATE
+    prompt "802.11b rate"
+    depends on CSI_TX_MODULATION_11B
+    default CSI_TX_11B_RATE_1M
+
+config CSI_TX_11B_RATE_1M
+    bool "1 Mbps"
+
+config CSI_TX_11B_RATE_2M
+    bool "2 Mbps"
+
+config CSI_TX_11B_RATE_5M5
+    bool "5.5 Mbps"
+
+config CSI_TX_11B_RATE_11M
+    bool "11 Mbps"
+
+endchoice
+
+choice CSI_TX_11G_RATE
+    prompt "802.11g OFDM rate"
+    depends on CSI_TX_MODULATION_11G
+    default CSI_TX_11G_RATE_6M
+
+config CSI_TX_11G_RATE_6M
+    bool "6 Mbps"
+
+config CSI_TX_11G_RATE_9M
+    bool "9 Mbps"
+
+config CSI_TX_11G_RATE_12M
+    bool "12 Mbps"
+
+config CSI_TX_11G_RATE_18M
+    bool "18 Mbps"
+
+config CSI_TX_11G_RATE_24M
+    bool "24 Mbps"
+
+config CSI_TX_11G_RATE_36M
+    bool "36 Mbps"
+
+config CSI_TX_11G_RATE_48M
+    bool "48 Mbps"
+
+config CSI_TX_11G_RATE_54M
+    bool "54 Mbps"
+
+endchoice
+
+choice CSI_TX_HT_MCS
+    prompt "802.11n HT MCS index"
+    depends on CSI_TX_MODULATION_HT20 || CSI_TX_MODULATION_HT40
+    default CSI_TX_HT_MCS_0
+
+config CSI_TX_HT_MCS_0
+    bool "MCS 0"
+
+config CSI_TX_HT_MCS_1
+    bool "MCS 1"
+
+config CSI_TX_HT_MCS_2
+    bool "MCS 2"
+
+config CSI_TX_HT_MCS_3
+    bool "MCS 3"
+
+config CSI_TX_HT_MCS_4
+    bool "MCS 4"
+
+config CSI_TX_HT_MCS_5
+    bool "MCS 5"
+
+config CSI_TX_HT_MCS_6
+    bool "MCS 6"
+
+config CSI_TX_HT_MCS_7
+    bool "MCS 7"
+
+endchoice
+
+choice CSI_TX_HE_MCS
+    prompt "802.11ax HE MCS index"
+    depends on CSI_TX_MODULATION_HE20
+    default CSI_TX_HE_MCS_0
+
+config CSI_TX_HE_MCS_0
+    bool "MCS 0"
+
+config CSI_TX_HE_MCS_1
+    bool "MCS 1"
+
+config CSI_TX_HE_MCS_2
+    bool "MCS 2"
+
+config CSI_TX_HE_MCS_3
+    bool "MCS 3"
+
+config CSI_TX_HE_MCS_4
+    bool "MCS 4"
+
+config CSI_TX_HE_MCS_5
+    bool "MCS 5"
+
+config CSI_TX_HE_MCS_6
+    bool "MCS 6"
+
+config CSI_TX_HE_MCS_7
+    bool "MCS 7"
+
+config CSI_TX_HE_MCS_8
+    bool "MCS 8"
+
+config CSI_TX_HE_MCS_9
+    bool "MCS 9"
+
+endchoice
+
+config CSI_TX_RATE_INDEX
+    int
+    default 0 if CSI_TX_11B_RATE_1M
+    default 1 if CSI_TX_11B_RATE_2M
+    default 2 if CSI_TX_11B_RATE_5M5
+    default 3 if CSI_TX_11B_RATE_11M
+    default 0 if CSI_TX_11G_RATE_6M
+    default 1 if CSI_TX_11G_RATE_9M
+    default 2 if CSI_TX_11G_RATE_12M
+    default 3 if CSI_TX_11G_RATE_18M
+    default 4 if CSI_TX_11G_RATE_24M
+    default 5 if CSI_TX_11G_RATE_36M
+    default 6 if CSI_TX_11G_RATE_48M
+    default 7 if CSI_TX_11G_RATE_54M
+    default 0 if CSI_TX_HT_MCS_0
+    default 1 if CSI_TX_HT_MCS_1
+    default 2 if CSI_TX_HT_MCS_2
+    default 3 if CSI_TX_HT_MCS_3
+    default 4 if CSI_TX_HT_MCS_4
+    default 5 if CSI_TX_HT_MCS_5
+    default 6 if CSI_TX_HT_MCS_6
+    default 7 if CSI_TX_HT_MCS_7
+    default 0 if CSI_TX_HE_MCS_0
+    default 1 if CSI_TX_HE_MCS_1
+    default 2 if CSI_TX_HE_MCS_2
+    default 3 if CSI_TX_HE_MCS_3
+    default 4 if CSI_TX_HE_MCS_4
+    default 5 if CSI_TX_HE_MCS_5
+    default 6 if CSI_TX_HE_MCS_6
+    default 7 if CSI_TX_HE_MCS_7
+    default 8 if CSI_TX_HE_MCS_8
+    default 9 if CSI_TX_HE_MCS_9
+
 choice CSI_TX_WIFI_SECONDARY_CHANNEL
     prompt "Secondary channel for 40 MHz"
+    depends on CSI_TX_MODULATION_HT40
     default CSI_TX_WIFI_SECONDARY_CHANNEL_ABOVE
 
 config CSI_TX_WIFI_SECONDARY_CHANNEL_ABOVE
@@ -29,15 +189,24 @@ config CSI_TX_WIFI_SECONDARY_CHANNEL_BELOW
 
 endchoice
 
-config CSI_TX_MCS_INDEX
-    int "Default HT MCS index"
-    range 0 7
-    default 0
+config CSI_TX_WIFI_CHANNEL
+    int "Default Wi-Fi channel"
+    range 1 13 if !CSI_TX_MODULATION_HT40
+    range 1 9 if CSI_TX_MODULATION_HT40 && CSI_TX_WIFI_SECONDARY_CHANNEL_ABOVE
+    range 5 13 if CSI_TX_MODULATION_HT40 && CSI_TX_WIFI_SECONDARY_CHANNEL_BELOW
+    default 5
+    help
+        HT40 above is valid on channels 1-9. HT40 below is valid on channels 5-13.
 
 config CSI_TX_INTERVAL_MS
     int "Transmit interval (ms)"
     range 1 60000
     default 20
+
+config CSI_TX_INDEX
+    int "Default TX index"
+    range 1 5
+    default 1
 
 config CSI_TX_MAX_TX_POWER_QDBM
     int "Max TX power (0.25 dBm units)"

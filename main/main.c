@@ -104,7 +104,6 @@ typedef struct {
     wifi_second_chan_t secondary_channel;
     wifi_phy_mode_t phy_mode;
     wifi_phy_rate_t phy_rate;
-    TickType_t interval_ticks;
     uint32_t interval_ms;
     int8_t max_tx_power_qdbm;
     int rate_index;
@@ -220,7 +219,9 @@ static lv_obj_t *s_menu_screen;
 static lv_obj_t *s_menu_header;
 static lv_obj_t *s_menu_body;
 static esp_timer_handle_t s_lvgl_tick_timer;
+static esp_timer_handle_t s_tx_timer;
 static spi_device_handle_t s_led_strip;
+static uint32_t s_tx_timer_interval_ms;
 
 extern const uint8_t _binary_espargos_logo_rgb565_start[] asm("_binary_espargos_logo_rgb565_start");
 extern const uint8_t _binary_espargos_logo_rgb565_end[] asm("_binary_espargos_logo_rgb565_end");
@@ -237,11 +238,6 @@ static const lv_image_dsc_t s_home_logo_image = {
     .data_size = sizeof(s_home_logo_pixels),
     .data = (const uint8_t *)s_home_logo_pixels,
 };
-
-static TickType_t csi_tx_ms_to_ticks(uint32_t interval_ms)
-{
-    return (interval_ms + portTICK_PERIOD_MS - 1U) / portTICK_PERIOD_MS;
-}
 
 static uint32_t csi_tx_get_tx_color(uint8_t tx_index)
 {
@@ -406,7 +402,6 @@ static void csi_tx_resolve_config(csi_tx_config_t *config)
     config->phy_rate = rate_table[config->rate_index];
     config->modulation_name = csi_tx_get_modulation_name(config->modulation);
     config->rate_name = rate_names[config->rate_index];
-    config->interval_ticks = csi_tx_ms_to_ticks(config->interval_ms);
     config->accent_rgb = csi_tx_get_tx_color(config->tx_index);
 }
 
@@ -984,6 +979,54 @@ static void csi_tx_lvgl_tick_cb(void *arg)
     lv_tick_inc(CSI_TX_UI_TICK_PERIOD_MS);
 }
 
+static void csi_tx_tx_timer_cb(void *arg)
+{
+    TaskHandle_t task_handle = (TaskHandle_t)arg;
+
+    if (task_handle != NULL) {
+        xTaskNotifyGive(task_handle);
+    }
+}
+
+static esp_err_t csi_tx_init_tx_timer(TaskHandle_t task_handle, uint32_t interval_ms)
+{
+    const esp_timer_create_args_t timer_args = {
+        .callback = csi_tx_tx_timer_cb,
+        .arg = task_handle,
+        .name = "tx_tick",
+    };
+
+    if (s_tx_timer != NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &s_tx_timer), TAG, "failed to create TX timer");
+    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(s_tx_timer, interval_ms * 1000ULL), TAG, "failed to start TX timer");
+    s_tx_timer_interval_ms = interval_ms;
+    return ESP_OK;
+}
+
+static esp_err_t csi_tx_update_tx_timer_interval(uint32_t interval_ms)
+{
+    if (s_tx_timer == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+
+    if (s_tx_timer_interval_ms == interval_ms && esp_timer_is_active(s_tx_timer)) {
+        return ESP_OK;
+    }
+
+    if (esp_timer_is_active(s_tx_timer)) {
+        ESP_RETURN_ON_ERROR(esp_timer_stop(s_tx_timer), TAG, "failed to stop TX timer");
+    }
+
+    ESP_RETURN_ON_ERROR(esp_timer_start_periodic(s_tx_timer, interval_ms * 1000ULL),
+                        TAG,
+                        "failed to start TX timer");
+    s_tx_timer_interval_ms = interval_ms;
+    return ESP_OK;
+}
+
 static void csi_tx_show_splash(void)
 {
     size_t image_size = (size_t)(_binary_espargos_logo_rgb565_end - _binary_espargos_logo_rgb565_start);
@@ -1125,7 +1168,6 @@ static void csi_tx_init_ui(void)
 static void csi_tx_ui_task(void *arg)
 {
     uint32_t last_color = UINT32_MAX;
-    uint32_t last_led_color = UINT32_MAX;
     csi_tx_ui_mode_t last_mode = (csi_tx_ui_mode_t)-1;
     char last_status[192] = "";
     char last_header[24] = "";
@@ -1191,11 +1233,7 @@ static void csi_tx_ui_task(void *arg)
         }
 
         lv_timer_handler();
-
-        if (view_config.accent_rgb != last_led_color) {
-            csi_tx_set_led_rgb(view_config.accent_rgb);
-            last_led_color = view_config.accent_rgb;
-        }
+        csi_tx_set_led_rgb(view_config.accent_rgb);
 
         vTaskDelay(pdMS_TO_TICKS(CSI_TX_UI_REFRESH_MS));
     }
@@ -1329,11 +1367,9 @@ void app_main(void)
 {
     uint16_t sequence = 0;
     uint32_t tx_failures = 0;
-    TickType_t last_wake_tick;
-    TickType_t last_status_tick;
-    TickType_t status_period_ticks = pdMS_TO_TICKS(CSI_TX_STATUS_PERIOD_MS);
     csi_tx_config_t boot_config;
     esp_err_t load_err;
+    int64_t last_status_us;
 
     memset(&s_state, 0, sizeof(s_state));
     boot_config = csi_tx_get_default_config();
@@ -1367,32 +1403,25 @@ void app_main(void)
     csi_tx_set_led_rgb(s_state.active_config.accent_rgb);
     ESP_ERROR_CHECK(csi_tx_init_wifi());
     csi_tx_log_config(&s_state.active_config);
+    ESP_ERROR_CHECK(csi_tx_init_tx_timer(xTaskGetCurrentTaskHandle(), s_state.active_config.interval_ms));
 
-    last_wake_tick = xTaskGetTickCount();
-    last_status_tick = last_wake_tick;
+    last_status_us = esp_timer_get_time();
 
     while (true) {
         csi_tx_config_t config = csi_tx_get_active_config();
         esp_err_t err;
+        uint32_t pending_intervals;
 
+        ESP_ERROR_CHECK(csi_tx_update_tx_timer_interval(config.interval_ms));
         csi_tx_poll_button();
+        config = csi_tx_get_active_config();
+        ESP_ERROR_CHECK(csi_tx_update_tx_timer_interval(config.interval_ms));
 
-        s_frame.sequence_control[0] = (uint8_t)((sequence & 0x0fU) << 4);
-        s_frame.sequence_control[1] = (uint8_t)((sequence >> 4) & 0xffU);
-        err = esp_wifi_80211_tx(WIFI_IF_STA, &s_frame, sizeof(s_frame), false);
-        if (err != ESP_OK) {
-            tx_failures++;
-            if (err == ESP_ERR_NO_MEM) {
-                vTaskDelay(config.interval_ticks);
-            }
-        }
+        pending_intervals = ulTaskNotifyTake(pdFALSE, pdMS_TO_TICKS(5));
+        if (pending_intervals == 0) {
+            int64_t now_us = esp_timer_get_time();
 
-        sequence++;
-        csi_tx_set_runtime_stats(sequence, tx_failures, config.channel);
-
-        {
-            TickType_t now_tick = xTaskGetTickCount();
-            if ((now_tick - last_status_tick) >= status_period_ticks) {
+            if ((now_us - last_status_us) >= (CSI_TX_STATUS_PERIOD_MS * 1000LL)) {
                 csi_tx_state_t snapshot = csi_tx_get_state_copy();
                 ESP_LOGI(TAG,
                          "tx_count=%" PRIu32 " tx_failures=%" PRIu32 " channel=%u tx=%u",
@@ -1400,10 +1429,33 @@ void app_main(void)
                          snapshot.tx_failures,
                          snapshot.current_channel,
                          snapshot.active_config.tx_index);
-                last_status_tick = now_tick;
+                last_status_us = now_us;
             }
+            continue;
         }
 
-        vTaskDelayUntil(&last_wake_tick, config.interval_ticks);
+        s_frame.sequence_control[0] = (uint8_t)((sequence & 0x0fU) << 4);
+        s_frame.sequence_control[1] = (uint8_t)((sequence >> 4) & 0xffU);
+        err = esp_wifi_80211_tx(WIFI_IF_STA, &s_frame, sizeof(s_frame), false);
+        if (err != ESP_OK) {
+            tx_failures++;
+        }
+
+        sequence++;
+        csi_tx_set_runtime_stats(sequence, tx_failures, config.channel);
+
+        {
+            int64_t now_us = esp_timer_get_time();
+            if ((now_us - last_status_us) >= (CSI_TX_STATUS_PERIOD_MS * 1000LL)) {
+                csi_tx_state_t snapshot = csi_tx_get_state_copy();
+                ESP_LOGI(TAG,
+                         "tx_count=%" PRIu32 " tx_failures=%" PRIu32 " channel=%u tx=%u",
+                         snapshot.tx_count,
+                         snapshot.tx_failures,
+                         snapshot.current_channel,
+                         snapshot.active_config.tx_index);
+                last_status_us = now_us;
+            }
+        }
     }
 }

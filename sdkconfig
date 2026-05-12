@@ -135,6 +135,8 @@ CONFIG_SOC_HUK_SUPPORTED=y
 # default:
 CONFIG_SOC_MODEM_CLOCK_SUPPORTED=y
 # default:
+CONFIG_SOC_REGI2C_SUPPORTED=y
+# default:
 CONFIG_SOC_LIGHT_SLEEP_SUPPORTED=y
 # default:
 CONFIG_SOC_DEEP_SLEEP_SUPPORTED=y
@@ -803,6 +805,10 @@ CONFIG_SOC_LP_CORE_SUPPORT_ETM=y
 # default:
 CONFIG_SOC_LP_CORE_SUPPORT_STORE_LOAD_EXCEPTIONS=y
 # default:
+CONFIG_SOC_LP_CORE_SUPPORT_I2C=y
+# default:
+CONFIG_SOC_LP_CORE_HW_AUTO_CLRWAKEUPCAUSE=y
+# default:
 CONFIG_IDF_CMAKE=y
 # default:
 CONFIG_IDF_TOOLCHAIN="gcc"
@@ -834,6 +840,14 @@ CONFIG_APP_BUILD_GENERATE_BINARIES=y
 CONFIG_APP_BUILD_BOOTLOADER=y
 # default:
 CONFIG_APP_BUILD_USE_FLASH_SECTIONS=y
+
+#
+# Minimize binary changes between builds
+#
+# default:
+# CONFIG_APP_BUILD_MINIMIZE_BINARY_CHANGES is not set
+# end of Minimize binary changes between builds
+
 # default:
 # CONFIG_APP_REPRODUCIBLE_BUILD is not set
 # default:
@@ -1013,8 +1027,6 @@ CONFIG_ESP_ROM_HAS_HAL_WDT=y
 # default:
 CONFIG_ESP_ROM_HAS_HAL_SYSTIMER=y
 # default:
-CONFIG_ESP_ROM_SYSTIMER_INIT_PATCH=y
-# default:
 CONFIG_ESP_ROM_HAS_HEAP_TLSF=y
 # default:
 CONFIG_ESP_ROM_TLSF_CHECK_PATCH=y
@@ -1130,11 +1142,6 @@ CONFIG_ESPTOOLPY_AFTER_RESET=y
 CONFIG_ESPTOOLPY_AFTER="hard-reset"
 # default:
 CONFIG_ESPTOOLPY_MONITOR_BAUD=115200
-
-#
-# Fast Reflashing
-#
-# end of Fast Reflashing
 # end of Serial flasher config
 
 #
@@ -1292,16 +1299,29 @@ CONFIG_COMPILER_CXX_GLIBCXX_CONSTEXPR_NO_CHANGE=y
 #
 
 #
-# BLE Log
+# BT Logs
+#
+
+#
+# Log Sources
 #
 # default:
-# CONFIG_BLE_LOG_ENABLED is not set
-# end of BLE Log
+# CONFIG_BT_LE_CONTROLLER_LOG_ENABLED is not set
+# end of Log Sources
 
 # default:
-# CONFIG_BT_BLE_LOG_SPI_OUT_ENABLED is not set
+# CONFIG_BT_LOG_CRITICAL_ONLY is not set
 # default:
-# CONFIG_BT_BLE_LOG_UHCI_OUT_ENABLED is not set
+# CONFIG_BLE_LOG_ENABLED is not set
+
+#
+# Legacy SPI Log Output (Deprecated - use BT Log Async Output instead)
+#
+# default:
+# CONFIG_BT_BLE_LOG_SPI_OUT_ENABLED is not set
+# end of Legacy SPI Log Output (Deprecated - use BT Log Async Output instead)
+# end of BT Logs
+
 # default:
 # CONFIG_BT_LE_USED_MEM_STATISTICS_ENABLED is not set
 # end of Common Options
@@ -2443,6 +2463,8 @@ CONFIG_SLAVE_IDF_TARGET_ESP32=y
 # default:
 # CONFIG_SLAVE_IDF_TARGET_ESP32C61 is not set
 # default:
+# CONFIG_SLAVE_IDF_TARGET_ESP32S31 is not set
+# default:
 CONFIG_SLAVE_SOC_WIFI_SUPPORTED=y
 # default:
 CONFIG_SLAVE_SOC_WIFI_WAPI_SUPPORT=y
@@ -3434,8 +3456,6 @@ CONFIG_MBEDTLS_TLS_SERVER_AND_CLIENT=y
 # CONFIG_MBEDTLS_TLS_SERVER_ONLY is not set
 # default:
 # CONFIG_MBEDTLS_TLS_CLIENT_ONLY is not set
-# default:
-# CONFIG_MBEDTLS_TLS_DISABLED is not set
 # default:
 # CONFIG_MBEDTLS_SSL_KEEP_PEER_CERTIFICATE is not set
 # default:

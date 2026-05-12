@@ -337,6 +337,17 @@ static void csi_tx_get_rate_table(csi_tx_modulation_t modulation,
     }
 }
 
+static uint8_t csi_tx_clamp_channel(uint8_t channel, uint8_t min_channel, uint8_t max_channel)
+{
+    if (channel < min_channel) {
+        return min_channel;
+    }
+    if (channel > max_channel) {
+        return max_channel;
+    }
+    return channel;
+}
+
 static void csi_tx_resolve_config(csi_tx_config_t *config)
 {
     const wifi_phy_rate_t *rate_table = NULL;
@@ -395,9 +406,7 @@ static void csi_tx_resolve_config(csi_tx_config_t *config)
         break;
     }
 
-    if (config->channel < config->min_channel || config->channel > config->max_channel) {
-        config->channel = config->min_channel;
-    }
+    config->channel = csi_tx_clamp_channel(config->channel, config->min_channel, config->max_channel);
 
     config->phy_rate = rate_table[config->rate_index];
     config->modulation_name = csi_tx_get_modulation_name(config->modulation);
@@ -596,8 +605,8 @@ static esp_err_t csi_tx_apply_wifi_config(const csi_tx_config_t *config)
     ESP_RETURN_ON_ERROR(esp_wifi_set_max_tx_power(config->max_tx_power_qdbm), TAG, "failed to set TX power");
     ESP_RETURN_ON_ERROR(esp_wifi_set_protocol(WIFI_IF_STA, config->protocol_bitmap), TAG, "failed to set protocol");
     ESP_RETURN_ON_ERROR(esp_wifi_set_bandwidth(WIFI_IF_STA, config->bandwidth), TAG, "failed to set bandwidth");
-    ESP_RETURN_ON_ERROR(csi_tx_apply_channel(config->channel, config->secondary_channel), TAG, "failed to set channel");
     ESP_RETURN_ON_ERROR(esp_wifi_config_80211_tx(WIFI_IF_STA, &rate_config), TAG, "failed to set fixed TX config");
+    ESP_RETURN_ON_ERROR(csi_tx_apply_channel(config->channel, config->secondary_channel), TAG, "failed to set channel");
     return ESP_OK;
 }
 
@@ -830,7 +839,9 @@ static void csi_tx_cycle_menu_value(csi_tx_config_t *config, csi_tx_menu_item_t 
         config->modulation = csi_tx_get_next_modulation(config->modulation);
         config->rate_index = 0;
         if (config->modulation == CSI_TX_MOD_HT40 && config->secondary_channel == WIFI_SECOND_CHAN_NONE) {
-            config->secondary_channel = WIFI_SECOND_CHAN_ABOVE;
+            config->secondary_channel = config->channel > 9
+                ? WIFI_SECOND_CHAN_BELOW
+                : WIFI_SECOND_CHAN_ABOVE;
         }
         break;
     case CSI_TX_MENU_RATE:
@@ -1366,6 +1377,7 @@ static void csi_tx_poll_button(void)
 void app_main(void)
 {
     uint16_t sequence = 0;
+    uint32_t tx_count = 0;
     uint32_t tx_failures = 0;
     csi_tx_config_t boot_config;
     esp_err_t load_err;
@@ -1442,7 +1454,8 @@ void app_main(void)
         }
 
         sequence++;
-        csi_tx_set_runtime_stats(sequence, tx_failures, config.channel);
+        tx_count++;
+        csi_tx_set_runtime_stats(tx_count, tx_failures, config.channel);
 
         {
             int64_t now_us = esp_timer_get_time();

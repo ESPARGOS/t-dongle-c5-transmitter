@@ -1,10 +1,13 @@
 # LILYGO T-Dongle-C5 ESPARGOS Test Transmitter
 
+<img src="img/dongle-in-powerbank.png" align="right" width="260" alt="LILYGO T-Dongle-C5 plugged into a power bank">
+
 This repository contains the source code for a Wi-Fi test transmitter running on
 a [LILYGO T-Dongle-C5](https://lilygo.cc/en-us/products/t-dongle-c5).
 It is intended for experiments with [ESPARGOS](https://espargos.net/) and transmits
 configurable 802.11 frames that can be used as known test signals for channel
-measurement experiments.
+measurement experiments. You can plug the T-Dongle-C5 into a power bank and use
+that as a portable test transmitter.
 
 The firmware is built with ESP-IDF for the ESP32-C5. It uses the T-Dongle-C5
 display, button, and RGB LED.

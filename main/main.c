@@ -605,8 +605,8 @@ static esp_err_t csi_tx_apply_wifi_config(const csi_tx_config_t *config)
     ESP_RETURN_ON_ERROR(esp_wifi_set_max_tx_power(config->max_tx_power_qdbm), TAG, "failed to set TX power");
     ESP_RETURN_ON_ERROR(esp_wifi_set_protocol(WIFI_IF_STA, config->protocol_bitmap), TAG, "failed to set protocol");
     ESP_RETURN_ON_ERROR(esp_wifi_set_bandwidth(WIFI_IF_STA, config->bandwidth), TAG, "failed to set bandwidth");
-    ESP_RETURN_ON_ERROR(esp_wifi_config_80211_tx(WIFI_IF_STA, &rate_config), TAG, "failed to set fixed TX config");
     ESP_RETURN_ON_ERROR(csi_tx_apply_channel(config->channel, config->secondary_channel), TAG, "failed to set channel");
+    ESP_RETURN_ON_ERROR(esp_wifi_config_80211_tx(WIFI_IF_STA, &rate_config), TAG, "failed to set fixed TX config");
     return ESP_OK;
 }
 
@@ -693,12 +693,24 @@ static void csi_tx_set_led_rgb(uint32_t rgb)
 
 static esp_err_t csi_tx_apply_runtime_config(csi_tx_config_t config)
 {
+    csi_tx_config_t previous_config;
     esp_err_t persist_err;
 
     csi_tx_resolve_config(&config);
 
     if (s_wifi_ready) {
-        ESP_RETURN_ON_ERROR(csi_tx_apply_wifi_config(&config), TAG, "failed to apply Wi-Fi config");
+        previous_config = csi_tx_get_active_config();
+        esp_err_t err = csi_tx_apply_wifi_config(&config);
+        if (err != ESP_OK) {
+            ESP_LOGE(TAG, "failed to apply Wi-Fi config: %s; restoring previous config",
+                     esp_err_to_name(err));
+            esp_err_t rollback_err = csi_tx_apply_wifi_config(&previous_config);
+            if (rollback_err != ESP_OK) {
+                ESP_LOGE(TAG, "failed to restore previous Wi-Fi config: %s",
+                         esp_err_to_name(rollback_err));
+            }
+            return err;
+        }
     } else {
         csi_tx_set_runtime_stats(s_state.tx_count, s_state.tx_failures, config.channel);
     }

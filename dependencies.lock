@@ -11,15 +11,15 @@ dependencies:
       type: service
     version: 9.3.0
   waveshare/esp_lcd_st7735:
-    component_hash: 811c4168555af5878eb9ec8c3eee8af277afebc3bc516bc0daa57656eee09c69
+    component_hash: bf2af3e1b6c6388030d7922f2fa2a2d4efd179561ed0ea7fc89cd7d0b7ac6a52
     dependencies: []
     source:
       registry_url: https://components.espressif.com/
       type: service
-    version: 1.0.1
+    version: 2.0.0
 direct_dependencies:
 - lvgl/lvgl
 - waveshare/esp_lcd_st7735
-manifest_hash: 303c35d9764855f5be93e91018b6b65dd5341224657bc66b577dc91a2428472c
+manifest_hash: 4ca25cfa78f873023d1de86ba2004c3fa4d435b6b0d6da69e34a701535667a04
 target: esp32c5
 version: 3.0.0

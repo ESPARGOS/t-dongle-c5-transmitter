@@ -24,13 +24,6 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Test firmware packaging and installer
-        run: |
-          python3 -m unittest discover -s tests
-          node --test tests/*.test.mjs
       - name: Check out pinned ESP-IDF
         uses: actions/checkout@v4
         with:

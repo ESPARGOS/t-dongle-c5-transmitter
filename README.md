@@ -1,5 +1,7 @@
 # LILYGO T-Dongle-C5 ESPARGOS Test Transmitter
 
+**[Install firmware from your browser →](https://espargos.net/t-dongle-c5-transmitter/)**
+
 <img src="img/dongle-in-powerbank.png" align="right" width="260" alt="LILYGO T-Dongle-C5 plugged into a power bank">
 
 This repository contains the source code for a Wi-Fi test transmitter running on

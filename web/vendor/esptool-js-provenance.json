@@ -1,0 +1,6 @@
+{
+  "version": "0.7.0",
+  "source": "https://github.com/espressif/esptool-js/releases/tag/v0.7.0",
+  "archive_sha256": "9c7797cfbcac3a989ab85c52c9daaa65ffc0d538c273a055757b98bb846fdf1f",
+  "bundle_sha256": "00ebe6fb0b202976d3e2a3c6b9a6bd438c26a81d2af6739c95ac276a64c1a84e"
+}

@@ -5,3 +5,7 @@ managed_components/
 # Python cache
 __pycache__/
 *.pyc
+
+# Web installer output / CI SDK checkout
+dist/
+.esp-idf/

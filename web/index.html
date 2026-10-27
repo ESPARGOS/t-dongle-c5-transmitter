@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>T-Dongle-C5 transmitter · ESPARGOS</title>
+  <meta name="description" content="Install ESPARGOS test transmitter firmware on your LILYGO T-Dongle-C5 directly from your browser.">
+  <link rel="icon" href="logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="fonts.css">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.mjs"></script>
+</head>
+<body>
+  <header><a href="https://espargos.net/"><img src="logo.svg" alt="ESPARGOS" width="180" height="36"></a><span>Test transmitter</span></header>
+  <main>
+    <div class="intro">
+      <div>
+        <h1>T-Dongle-C5 firmware installer</h1>
+        <p>Turn your LILYGO T-Dongle-C5 into a portable Wi-Fi test transmitter for ESPARGOS.</p>
+        <a href="manual.pdf" download>Download user manual (PDF)</a>
+      </div>
+      <img src="dongle-in-powerbank.png" alt="T-Dongle-C5 plugged into a power bank" width="112" height="112">
+    </div>
+    <section aria-labelledby="prepare-title">
+      <h2 id="prepare-title">1. Plug in your dongle</h2>
+      <ol>
+        <li>Open this page in a desktop browser that supports WebSerial.</li>
+        <li>Hold the dongle’s button while plugging it into USB to enter BOOT mode, then release it.</li>
+        <li>Close any serial monitors, connect below, and select the dongle’s USB serial port.</li>
+      </ol>
+      <p class="muted">Use a data-capable USB connection. This firmware is for the LILYGO T-Dongle-C5 with 16 MB flash.</p>
+      <div class="actions"><button id="connect" disabled>Connect dongle</button><button id="disconnect" class="secondary" disabled>Disconnect</button></div>
+      <p id="device" class="muted">Not connected</p>
+    </section>
+    <section aria-labelledby="install-title">
+      <h2 id="install-title">2. Install firmware</h2>
+      <p id="version" class="muted">Loading firmware…</p>
+      <p>Installing replaces the firmware and partition table. Saved transmitter settings are preserved.</p>
+      <div class="actions"><button id="install" disabled>Install transmitter firmware</button></div>
+      <p id="status" role="status" aria-live="polite">Loading installer…</p>
+      <progress id="progress" max="100" value="0" aria-label="Firmware installation progress"></progress>
+      <noscript>JavaScript is required to install firmware from your browser.</noscript>
+    </section>
+    <section aria-labelledby="use-title">
+      <h2 id="use-title">3. Start transmitting</h2>
+      <p>Unplug and reconnect the dongle without holding the button. You can also plug it into a power bank.</p>
+      <p>Short-press the button to open the setup menu and move between settings. Long-press to edit, short-press to change a value, then long-press to save.</p>
+    </section>
+    <details><summary>Installation log</summary><pre id="log"></pre></details>
+    <details><summary>Open-source licenses</summary><p>Uses <a href="https://github.com/espressif/esptool-js">Espressif esptool.js</a> 0.7.0.</p><p><a href="vendor/LICENSE-esptool-js">esptool.js</a> · <a href="vendor/LICENSE-pako">pako</a> · <a href="vendor/LICENSE-tslib">tslib</a> · <a href="vendor/LICENSE-atob-lite">atob-lite</a></p></details>
+  </main>
+  <footer><a href="https://espargos.net/">ESPARGOS</a><a href="https://github.com/ESPARGOS/t-dongle-c5-transmitter">Source &amp; build instructions ↗</a></footer>
+</body>
+</html>

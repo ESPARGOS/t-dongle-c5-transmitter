@@ -1,0 +1,126 @@
+name: Build firmware and deploy installer
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Serialize production builds/deployments so an older build cannot replace a newer one.
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Match the SDK revision used by this project's ESP-IDF 6.2 development build.
+  IDF_REF: 4d59230ddff16327812782151ef0afef202dc6d7
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test firmware packaging and installer
+        run: |
+          python3 -m unittest discover -s tests
+          node --test tests/*.test.mjs
+      - name: Check out pinned ESP-IDF
+        uses: actions/checkout@v4
+        with:
+          repository: espressif/esp-idf
+          ref: ${{ env.IDF_REF }}
+          path: .esp-idf
+          submodules: recursive
+      - name: Cache SDK tools
+        uses: actions/cache@v4
+        with:
+          path: ~/.espressif
+          key: idf-${{ runner.os }}-${{ runner.arch }}-${{ env.IDF_REF }}-esp32c5
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flex bison gperf cmake ninja-build ccache libffi-dev libssl-dev python3-venv libusb-1.0-0
+      - name: Install SDK tools
+        run: .esp-idf/install.sh esp32c5
+      - name: Build firmware and package site
+        shell: bash
+        env:
+          FIRMWARE_VERSION: ${{ github.sha }}
+        run: |
+          source .esp-idf/export.sh
+          idf.py build
+          python scripts/package_site.py --build build --output dist --version "$FIRMWARE_VERSION"
+      - name: Upload firmware and installer for review
+        uses: actions/upload-artifact@v4
+        with:
+          name: transmitter-installer
+          path: dist/
+          if-no-files-found: error
+
+  manual:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install LaTeX, fonts, and image tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            texlive-xetex texlive-latex-extra \
+            texlive-fonts-recommended texlive-fonts-extra \
+            fonts-crosextra-carlito inkscape
+          mkdir -p ~/.local/share/fonts
+          ln -s /usr/share/texlive/texmf-dist/fonts/opentype ~/.local/share/fonts/texlive-opentype
+          fc-cache -f
+      - name: Build manual PDF
+        run: make -C manual
+      - name: Upload manual
+        uses: actions/upload-artifact@v4
+        with:
+          name: transmitter-manual
+          path: manual/manual.pdf
+          if-no-files-found: error
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: [build, manual]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download installer
+        uses: actions/download-artifact@v4
+        with:
+          name: transmitter-installer
+          path: dist
+      - name: Include manual PDF
+        uses: actions/download-artifact@v4
+        with:
+          name: transmitter-manual
+          path: dist
+      - name: Check manual is included
+        run: test -s dist/manual.pdf
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Upload complete Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+      - name: Deploy installer
+        id: deployment
+        uses: actions/deploy-pages@v4

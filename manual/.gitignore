@@ -1,0 +1,12 @@
+*.aux
+*.log
+*.out
+*.toc
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+*.xdv
+
+# Generated PDFs (manual and pdfbook2 booklet output)
+/manual.pdf
+/manual-book.pdf
